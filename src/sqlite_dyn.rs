@@ -136,7 +136,7 @@ pub fn extract_credentials_from_db(db_path: &Path) -> Result<AppConfig> {
             bail!("sqlite3_open failed for {:?}", db_path);
         }
 
-        struct DbGuard<'a>(*mut Sqlite3, FnClose, &'a DynLib);
+        struct DbGuard<'a>(*mut Sqlite3, FnClose, std::marker::PhantomData<&'a DynLib>);
         impl<'a> Drop for DbGuard<'a> {
             fn drop(&mut self) {
                 if !self.0.is_null() {
@@ -144,7 +144,7 @@ pub fn extract_credentials_from_db(db_path: &Path) -> Result<AppConfig> {
                 }
             }
         }
-        let _guard = DbGuard(db, sqlite_close, &lib);
+        let _guard = DbGuard(db, sqlite_close, std::marker::PhantomData);
 
         // 1. Query mesh table
         let mesh_sql = CString::new("SELECT uuid, net_key, app_key FROM mesh LIMIT 1;").unwrap();
