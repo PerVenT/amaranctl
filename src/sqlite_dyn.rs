@@ -58,11 +58,16 @@ impl DynLib {
 }
 
 #[cfg(windows)]
+extern "system" {
+    fn FreeLibrary(hLibModule: *mut c_void) -> i32;
+}
+
+#[cfg(windows)]
 impl Drop for DynLib {
     fn drop(&mut self) {
         if !self.handle.is_null() {
             unsafe {
-                windows_sys::Win32::System::LibraryLoader::FreeLibrary(self.handle as _);
+                FreeLibrary(self.handle as _);
             }
         }
     }

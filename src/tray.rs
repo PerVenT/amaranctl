@@ -12,6 +12,7 @@ use crate::config::AppConfig;
 use crate::hotkeys::HotkeyBindings;
 
 pub enum AppAction {
+    SetPower(bool),
     TogglePower,
     SetBrightness(f32),
     AdjustBrightness(f32),
@@ -48,6 +49,11 @@ pub fn create_default_icon() -> Icon {
 }
 
 pub fn run_tray_app(config: AppConfig) -> Result<()> {
+    #[cfg(windows)]
+    unsafe {
+        windows_sys::Win32::System::Console::FreeConsole();
+    }
+
     #[cfg(target_os = "linux")]
     {
         let _ = gtk::init();
@@ -107,6 +113,7 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
 
     // Spawn async background worker thread for BLE
     let (tx, mut rx) = mpsc::unbounded_channel::<AppAction>();
+    let tx_worker = tx.clone();
 
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -126,8 +133,47 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
             // Attempt initial connection in background
             let _ = client.ensure_connected().await;
 
+            // Spawn IPC server concurrently with BLE loop
+            let tx_ipc = tx_worker.clone();
+            tokio::spawn(async move {
+                use crate::ipc::{IpcCommand, IpcResponse, IpcServer};
+                let _ = IpcServer::run(move |cmd| {
+                    let tx = tx_ipc.clone();
+                    async move {
+                        match cmd {
+                            IpcCommand::On => {
+                                let _ = tx.send(AppAction::SetPower(true));
+                                IpcResponse { ok: true, message: Some("Power ON".into()) }
+                            }
+                            IpcCommand::Off => {
+                                let _ = tx.send(AppAction::SetPower(false));
+                                IpcResponse { ok: true, message: Some("Power OFF".into()) }
+                            }
+                            IpcCommand::Toggle => {
+                                let _ = tx.send(AppAction::TogglePower);
+                                IpcResponse { ok: true, message: Some("Power TOGGLED".into()) }
+                            }
+                            IpcCommand::Brightness(val) => {
+                                let _ = tx.send(AppAction::SetBrightness(val));
+                                IpcResponse { ok: true, message: Some(format!("Brightness set to {:.1}%", val)) }
+                            }
+                            IpcCommand::Cct(val) => {
+                                let _ = tx.send(AppAction::SetCct(val));
+                                IpcResponse { ok: true, message: Some(format!("CCT set to {}K", val)) }
+                            }
+                            IpcCommand::Ping => {
+                                IpcResponse { ok: true, message: Some("pong".into()) }
+                            }
+                        }
+                    }
+                }).await;
+            });
+
             while let Some(action) = rx.recv().await {
                 match action {
+                    AppAction::SetPower(on) => {
+                        let _ = client.set_power(on).await;
+                    }
                     AppAction::TogglePower => {
                         let new_state = !client.last_power;
                         let _ = client.set_power(new_state).await;

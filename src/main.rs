@@ -1,5 +1,3 @@
-#![windows_subsystem = "windows"]
-
 use anyhow::Result;
 use clap::Parser;
 use std::env;
@@ -8,20 +6,8 @@ use std::path::PathBuf;
 use amaranctl::ble::BleMeshClient;
 use amaranctl::cli::{Cli, Commands};
 use amaranctl::config::AppConfig;
+use amaranctl::ipc::{send_ipc_command, IpcCommand};
 use amaranctl::tray::run_tray_app;
-
-fn attach_parent_console_if_cli() {
-    #[cfg(windows)]
-    {
-        if std::env::args().len() > 1 {
-            unsafe {
-                windows_sys::Win32::System::Console::AttachConsole(
-                    windows_sys::Win32::System::Console::ATTACH_PARENT_PROCESS,
-                );
-            }
-        }
-    }
-}
 
 fn load_or_auto_import_config(custom: Option<PathBuf>) -> Result<AppConfig> {
     if let Some(p) = custom {
@@ -77,90 +63,79 @@ fn load_or_auto_import_config(custom: Option<PathBuf>) -> Result<AppConfig> {
 }
 
 fn main() -> Result<()> {
-    attach_parent_console_if_cli();
-
     let args = Cli::parse();
-    let config = load_or_auto_import_config(args.config)?;
 
-    match args.command {
-        Some(Commands::On) => {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?;
-            rt.block_on(async {
-                println!("Connecting to Amaran...");
-                let mut client = BleMeshClient::new(config)?;
-                client.set_power(true).await?;
-                println!("Amaran 60x S turned ON.");
-                let _ = client.disconnect().await;
-                Ok::<(), anyhow::Error>(())
-            })?;
+    // Check if command can be dispatched to running background daemon via IPC
+    let maybe_ipc = match &args.command {
+        Some(Commands::On) => Some(IpcCommand::On),
+        Some(Commands::Off) => Some(IpcCommand::Off),
+        Some(Commands::Toggle) => Some(IpcCommand::Toggle),
+        Some(Commands::Brightness { value }) => Some(IpcCommand::Brightness(*value)),
+        Some(Commands::Cct { kelvin }) => Some(IpcCommand::Cct(*kelvin)),
+        _ => None,
+    };
+
+    if let Some(cmd) = maybe_ipc {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+
+        // 1. Try sending to background daemon (instant: ~30ms)
+        if let Ok(res) = rt.block_on(send_ipc_command(&cmd)) {
+            if let Some(msg) = res.message {
+                println!("{}", msg);
+            } else {
+                println!("OK");
+            }
+            return Ok(());
         }
-        Some(Commands::Off) => {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?;
-            rt.block_on(async {
-                println!("Connecting to Amaran...");
-                let mut client = BleMeshClient::new(config)?;
-                client.set_power(false).await?;
-                println!("Amaran 60x S turned OFF.");
-                let _ = client.disconnect().await;
-                Ok::<(), anyhow::Error>(())
-            })?;
-        }
-        Some(Commands::Toggle) => {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?;
-            rt.block_on(async {
-                println!("Connecting to Amaran...");
-                let mut client = BleMeshClient::new(config)?;
-                let new_state = !client.last_power;
-                client.set_power(new_state).await?;
-                println!("Power toggled to: {}.", if new_state { "ON" } else { "OFF" });
-                let _ = client.disconnect().await;
-                Ok::<(), anyhow::Error>(())
-            })?;
-        }
-        Some(Commands::Brightness { value }) => {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?;
-            rt.block_on(async {
-                println!("Connecting to Amaran...");
-                let mut client = BleMeshClient::new(config)?;
-                if value > 100.0 {
-                    let raw = value.clamp(0.0, 1000.0) as u16;
-                    client.set_brightness_raw(raw).await?;
-                    println!("Raw brightness set to {} / 1000.", raw);
-                } else {
-                    let pct = value.clamp(0.0, 100.0);
-                    client.set_brightness(pct).await?;
-                    println!("Brightness set to {:.1}%.", pct);
+
+        // 2. Fallback: daemon not running, connect directly via BLE
+        println!("Background daemon not running, connecting to Amaran directly...");
+        let config = load_or_auto_import_config(args.config)?;
+        rt.block_on(async {
+            let mut client = BleMeshClient::new(config)?;
+            client.ensure_connected().await?;
+            match cmd {
+                IpcCommand::On => {
+                    client.set_power(true).await?;
+                    println!("Amaran 60x S turned ON.");
                 }
-                let _ = client.disconnect().await;
-                Ok::<(), anyhow::Error>(())
-            })?;
-        }
-        Some(Commands::Cct { kelvin }) => {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?;
-            rt.block_on(async {
-                println!("Connecting to Amaran...");
-                let mut client = BleMeshClient::new(config)?;
-                let k = kelvin.clamp(2700, 6500);
-                client.set_cct(k).await?;
-                println!("CCT set to {}K.", k);
-                let _ = client.disconnect().await;
-                Ok::<(), anyhow::Error>(())
-            })?;
-        }
-        Some(Commands::Run) | None => {
-            run_tray_app(config)?;
-        }
+                IpcCommand::Off => {
+                    client.set_power(false).await?;
+                    println!("Amaran 60x S turned OFF.");
+                }
+                IpcCommand::Toggle => {
+                    let cur = client.last_power;
+                    client.set_power(!cur).await?;
+                    println!("Power toggled to: {}.", if !cur { "ON" } else { "OFF" });
+                }
+                IpcCommand::Brightness(val) => {
+                    if val > 100.0 {
+                        let raw = val.clamp(0.0, 1000.0) as u16;
+                        client.set_brightness_raw(raw).await?;
+                        println!("Raw brightness set to {} / 1000.", raw);
+                    } else {
+                        let pct = val.clamp(0.0, 100.0);
+                        client.set_brightness(pct).await?;
+                        println!("Brightness set to {:.1}%.", pct);
+                    }
+                }
+                IpcCommand::Cct(kelvin) => {
+                    let k = kelvin.clamp(2700, 6500);
+                    client.set_cct(k).await?;
+                    println!("CCT set to {}K.", k);
+                }
+                _ => {}
+            }
+            let _ = client.disconnect().await;
+            Ok::<(), anyhow::Error>(())
+        })?;
+        return Ok(());
     }
 
+    // Default: Run system tray daemon
+    let config = load_or_auto_import_config(args.config)?;
+    run_tray_app(config)?;
     Ok(())
 }
