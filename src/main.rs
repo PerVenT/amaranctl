@@ -66,6 +66,10 @@ fn load_or_auto_import_config(custom: Option<PathBuf>) -> Result<AppConfig> {
 }
 
 fn main() -> Result<()> {
+    std::panic::set_hook(Box::new(|info| {
+        eprintln!("[PANIC] {}", info);
+    }));
+
     let args = Cli::parse();
 
     // 1. If invoked as the detached background worker or with --foreground, run the tray app directly

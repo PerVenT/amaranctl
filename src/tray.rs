@@ -131,10 +131,7 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
                 }
             };
 
-            // Attempt initial connection in background
-            let _ = client.ensure_connected().await;
-
-            // Spawn IPC server concurrently with BLE loop
+            // Spawn IPC server IMMEDIATELY so IPC is available from millisecond 1
             let tx_ipc = tx_worker.clone();
             tokio::spawn(async move {
                 use crate::ipc::{IpcCommand, IpcResponse, IpcServer};
@@ -169,6 +166,9 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
                     }
                 }).await;
             });
+
+            // Attempt initial connection in background
+            let _ = client.ensure_connected().await;
 
             while let Some(action) = rx.recv().await {
                 match action {
@@ -215,7 +215,7 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
         unsafe {
             let mut msg: MSG = std::mem::zeroed();
             loop {
-                while PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+                while PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) > 0 {
                     if msg.message == windows_sys::Win32::UI::WindowsAndMessaging::WM_QUIT {
                         let _ = tx.send(AppAction::Quit);
                         return Ok(());
@@ -331,4 +331,7 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
             std::thread::sleep(Duration::from_millis(50));
         }
     }
+
+    #[allow(unreachable_code)]
+    Ok(())
 }

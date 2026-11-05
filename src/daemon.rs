@@ -31,17 +31,49 @@ pub fn spawn_detached_daemon(config_path: Option<&Path>) -> Result<u32> {
         cmd.arg("--config").arg(cfg);
     }
 
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    cmd.stdin(Stdio::null());
+
+    let log_file = dirs::home_dir()
+        .map(|h| h.join(".config").join("amaranctl").join("daemon.log"))
+        .and_then(|p| {
+            if let Some(parent) = p.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            std::fs::OpenOptions::new().create(true).append(true).open(&p).ok()
+        });
+
+    if let Some(f) = log_file {
+        if let Ok(f_err) = f.try_clone() {
+            cmd.stdout(f);
+            cmd.stderr(f_err);
+        } else {
+            cmd.stdout(Stdio::null());
+            cmd.stderr(Stdio::null());
+        }
+    } else {
+        cmd.stdout(Stdio::null());
+        cmd.stderr(Stdio::null());
+    }
 
     #[cfg(windows)]
     {
         const CREATE_NO_WINDOW: u32 = 0x08000000;
         const DETACHED_PROCESS: u32 = 0x00000008;
+        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x01000000;
+
+        cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_BREAKAWAY_FROM_JOB);
+        if let Ok(child) = cmd.spawn() {
+            return Ok(child.id());
+        }
+
         cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
     }
 
     let child = cmd.spawn().context("Failed to spawn detached daemon process")?;
-    Ok(child.id())
+    let pid = child.id();
+
+    // Give detached worker a moment to bind IPC pipe
+    std::thread::sleep(std::time::Duration::from_millis(60));
+
+    Ok(pid)
 }
