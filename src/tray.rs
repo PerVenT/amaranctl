@@ -17,7 +17,6 @@ pub enum AppAction {
     AdjustBrightness(f32),
     SetCct(u16),
     AdjustCct(i32),
-    ToggleAutostart,
     Quit,
 }
 
@@ -149,10 +148,6 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
                         let new_k = (cur + delta).clamp(2700, 6500) as u16;
                         let _ = client.set_cct(new_k).await;
                     }
-                    AppAction::ToggleAutostart => {
-                        let enabled = is_autostart_enabled();
-                        let _ = set_autostart(!enabled);
-                    }
                     AppAction::Quit => break,
                 }
             }
@@ -197,7 +192,8 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
                         "c_5600" => { let _ = tx.send(AppAction::SetCct(5600)); }
                         "c_6500" => { let _ = tx.send(AppAction::SetCct(6500)); }
                         "autostart" => {
-                            let _ = tx.send(AppAction::ToggleAutostart);
+                            let new_state = !is_autostart_enabled();
+                            let _ = set_autostart(new_state);
                             autostart_item.set_checked(is_autostart_enabled());
                         }
                         "quit" => {
@@ -254,7 +250,8 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
                     "c_5600" => { let _ = tx.send(AppAction::SetCct(5600)); }
                     "c_6500" => { let _ = tx.send(AppAction::SetCct(6500)); }
                     "autostart" => {
-                        let _ = tx.send(AppAction::ToggleAutostart);
+                        let new_state = !is_autostart_enabled();
+                        let _ = set_autostart(new_state);
                         autostart_item.set_checked(is_autostart_enabled());
                     }
                     "quit" => {

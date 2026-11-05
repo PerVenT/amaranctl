@@ -25,8 +25,12 @@ WantedBy=default.target
 
 #[cfg(windows)]
 pub fn is_autostart_enabled() -> bool {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
     let output = Command::new("reg")
         .args(["query", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run", "/v", "amaranctl"])
+        .creation_flags(CREATE_NO_WINDOW)
         .output();
 
     match output {
@@ -47,6 +51,9 @@ pub fn is_autostart_enabled() -> bool {
 
 #[cfg(windows)]
 pub fn set_autostart(enable: bool) -> Result<()> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
     if enable {
         let exe = env::current_exe().context("failed to get current executable path")?;
         let exe_str = exe.to_string_lossy().to_string();
@@ -64,6 +71,7 @@ pub fn set_autostart(enable: bool) -> Result<()> {
                 &val,
                 "/f",
             ])
+            .creation_flags(CREATE_NO_WINDOW)
             .status()
             .context("failed to execute reg.exe add")?;
 
@@ -79,6 +87,7 @@ pub fn set_autostart(enable: bool) -> Result<()> {
                 "amaranctl",
                 "/f",
             ])
+            .creation_flags(CREATE_NO_WINDOW)
             .status();
     }
     Ok(())
