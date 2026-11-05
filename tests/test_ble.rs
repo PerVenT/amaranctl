@@ -1,5 +1,5 @@
 use amaranctl::config::AppConfig;
-use amaranctl::ble::BleMeshClient;
+use amaranctl::ble::{BleMeshClient, LampStatus};
 
 #[test]
 fn test_ble_client_initialization_and_seq() {
@@ -24,4 +24,26 @@ fn test_ble_client_initialization_and_seq() {
 
     let pdu_on = client.build_onoff_pdu(2, true).expect("build onoff pdu");
     assert_eq!(pdu_on[0], 0x00); // Proxy Network PDU
+}
+
+#[test]
+fn test_lamp_status_defaults_and_formatting() {
+    let mut s = LampStatus {
+        connected: true,
+        connecting: false,
+        power: true,
+        brightness: 75.0,
+        cct: 5600,
+    };
+    assert_eq!(s.tooltip_text(), "Amaran 60x S — 🟢 ON | 75% | 5600K");
+
+    s.power = false;
+    assert_eq!(s.tooltip_text(), "Amaran 60x S — ⚪ OFF (Готовий)");
+
+    s.connecting = true;
+    assert_eq!(s.tooltip_text(), "Amaran 60x S — ⏳ Пошук та підключення...");
+
+    s.connecting = false;
+    s.connected = false;
+    assert_eq!(s.tooltip_text(), "Amaran 60x S — 🔴 Немає зв'язку (перевірте живлення лампи)");
 }

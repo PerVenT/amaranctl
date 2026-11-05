@@ -1,20 +1,59 @@
+use std::sync::Arc;
 use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use btleplug::api::{Central, Characteristic, Manager as _, Peripheral as _, ScanFilter, WriteType};
 use btleplug::platform::{Manager, Peripheral};
+use futures_util::StreamExt;
+use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::config::AppConfig;
 use crate::mesh::{
-    build_proxy_config_pdu, build_proxy_pdu, encode_brightness, encode_brightness_raw,
-    encode_cct, encode_onoff, encode_status_request, MeshSecurityContext,
-    PROXY_CFG_ADD_ADDRESSES, PROXY_CFG_SET_FILTER_TYPE, PROXY_FILTER_WHITELIST,
+    build_proxy_config_pdu, build_proxy_pdu, decode_telink_status, decrypt_proxy_pdu,
+    encode_brightness, encode_brightness_raw, encode_cct, encode_onoff, encode_status_request,
+    MeshSecurityContext, PROXY_CFG_ADD_ADDRESSES, PROXY_CFG_SET_FILTER_TYPE, PROXY_FILTER_WHITELIST,
 };
 
 pub const PROXY_DATA_IN_UUID: Uuid = Uuid::from_u128(0x00002add_0000_1000_8000_00805f9b34fb);
 pub const PROXY_DATA_OUT_UUID: Uuid = Uuid::from_u128(0x00002ade_0000_1000_8000_00805f9b34fb);
 
 pub const LOCAL_SRC_ADDR: u16 = 0x0001;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LampStatus {
+    pub connected: bool,
+    pub connecting: bool,
+    pub power: bool,
+    pub brightness: f32,
+    pub cct: u16,
+}
+
+impl Default for LampStatus {
+    fn default() -> Self {
+        Self {
+            connected: false,
+            connecting: false,
+            power: false,
+            brightness: 100.0,
+            cct: 5600,
+        }
+    }
+}
+
+impl LampStatus {
+    pub fn tooltip_text(&self) -> String {
+        if self.connecting {
+            "Amaran 60x S — ⏳ Пошук та підключення...".to_string()
+        } else if !self.connected {
+            "Amaran 60x S — 🔴 Немає зв'язку (перевірте живлення лампи)".to_string()
+        } else if self.power {
+            format!("Amaran 60x S — 🟢 ON | {:.0}% | {}K", self.brightness, self.cct)
+        } else {
+            "Amaran 60x S — ⚪ OFF (Готовий)".to_string()
+        }
+    }
+}
 
 pub struct BleMeshClient {
     pub config: AppConfig,
@@ -26,6 +65,7 @@ pub struct BleMeshClient {
     pub last_power: bool,
     pub last_brightness: u16,
     pub last_cct: u16,
+    pub status: Arc<RwLock<LampStatus>>,
 }
 
 impl BleMeshClient {
@@ -50,7 +90,12 @@ impl BleMeshClient {
             last_power: true,
             last_brightness: 500, // 50% default
             last_cct: 5600,       // 5600K default daylight
+            status: Arc::new(RwLock::new(LampStatus::default())),
         })
+    }
+
+    pub async fn current_status(&self) -> LampStatus {
+        self.status.read().await.clone()
     }
 
     pub fn next_seq(&mut self) -> u32 {
@@ -156,6 +201,7 @@ impl BleMeshClient {
     }
 
     pub async fn connect(&mut self) -> Result<()> {
+        self.status.write().await.connecting = true;
         let manager = Manager::new().await.context("failed to get BLE manager")?;
         let adapters = manager.adapters().await.context("failed to list BLE adapters")?;
         let adapter = adapters.into_iter().next().context("no Bluetooth adapter found on system")?;
@@ -197,14 +243,27 @@ impl BleMeshClient {
             Some(p) => p,
             None => {
                 let _ = adapter.stop_scan().await;
+                let mut s = self.status.write().await;
+                s.connecting = false;
+                s.connected = false;
                 bail!("Could not find target Amaran light '{}' ({})", target_name, target_mac);
             }
         };
 
         // Note: Connect and discover services BEFORE stopping scan on Windows
         // to prevent WinRT from dropping the peripheral watcher reference
-        peripheral.connect().await.context("failed to connect to peripheral")?;
-        peripheral.discover_services().await.context("failed to discover services")?;
+        if let Err(e) = peripheral.connect().await {
+            let mut s = self.status.write().await;
+            s.connecting = false;
+            s.connected = false;
+            return Err(e).context("failed to connect to peripheral");
+        }
+        if let Err(e) = peripheral.discover_services().await {
+            let mut s = self.status.write().await;
+            s.connecting = false;
+            s.connected = false;
+            return Err(e).context("failed to discover services");
+        }
         let _ = adapter.stop_scan().await;
 
         let chars = peripheral.characteristics();
@@ -216,6 +275,25 @@ impl BleMeshClient {
 
         if let Some(char_out) = chars.iter().find(|c| c.uuid == PROXY_DATA_OUT_UUID) {
             let _ = peripheral.subscribe(char_out).await;
+            if let Ok(mut stream) = peripheral.notifications().await {
+                let status_clone = self.status.clone();
+                let sec_clone = self.security.clone();
+                let iv = self.iv_index;
+                tokio::spawn(async move {
+                    while let Some(notif) = stream.next().await {
+                        if let Ok((_src, _dst, payload)) = decrypt_proxy_pdu(&sec_clone, iv, &notif.value) {
+                            if let Some(decoded) = decode_telink_status(&payload) {
+                                let mut s = status_clone.write().await;
+                                s.connected = true;
+                                s.connecting = false;
+                                s.power = decoded.power;
+                                s.brightness = decoded.brightness;
+                                s.cct = decoded.cct;
+                            }
+                        }
+                    }
+                });
+            }
         }
 
         // Send proxy filter setup handshake
@@ -244,6 +322,12 @@ impl BleMeshClient {
         self.char_in = Some(char_in);
         self.peripheral = Some(peripheral);
 
+        {
+            let mut s = self.status.write().await;
+            s.connected = true;
+            s.connecting = false;
+        }
+
         Ok(())
     }
 
@@ -253,6 +337,9 @@ impl BleMeshClient {
         }
         self.peripheral = None;
         self.char_in = None;
+        let mut s = self.status.write().await;
+        s.connected = false;
+        s.connecting = false;
         Ok(())
     }
 
@@ -269,21 +356,30 @@ impl BleMeshClient {
         Ok(())
     }
 
+    pub async fn poll_status(&mut self) -> Result<()> {
+        let addr = self.config.primary_light().map(|l| l.address).unwrap_or(2);
+        let pdu = self.build_status_request_pdu(addr)?;
+        self.send_raw_pdu(&pdu).await
+    }
+
     pub async fn set_power(&mut self, on: bool) -> Result<()> {
         let addr = self.config.primary_light().map(|l| l.address).unwrap_or(2);
         let pdu = self.build_onoff_pdu(addr, on)?;
+        self.status.write().await.power = on;
         self.send_raw_pdu(&pdu).await
     }
 
     pub async fn set_brightness(&mut self, percent: f32) -> Result<()> {
         let addr = self.config.primary_light().map(|l| l.address).unwrap_or(2);
         let pdu = self.build_brightness_pdu(addr, percent)?;
+        self.status.write().await.brightness = percent.clamp(0.0, 100.0);
         self.send_raw_pdu(&pdu).await
     }
 
     pub async fn set_brightness_raw(&mut self, raw: u16) -> Result<()> {
         let addr = self.config.primary_light().map(|l| l.address).unwrap_or(2);
         let pdu = self.build_brightness_raw_pdu(addr, raw)?;
+        self.status.write().await.brightness = (raw.min(1000) as f32) / 10.0;
         self.send_raw_pdu(&pdu).await
     }
 
@@ -291,6 +387,7 @@ impl BleMeshClient {
         let addr = self.config.primary_light().map(|l| l.address).unwrap_or(2);
         let intensity = self.last_brightness;
         let pdu = self.build_cct_pdu(addr, kelvin, intensity, 0)?;
+        self.status.write().await.cct = kelvin.clamp(2700, 6500);
         self.send_raw_pdu(&pdu).await
     }
 }

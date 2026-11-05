@@ -40,6 +40,7 @@ dependencies = [
  "clap",
  "cmac",
  "dirs",
+ "futures-util",
  "glob",
  "global-hotkey",
  "gtk",
