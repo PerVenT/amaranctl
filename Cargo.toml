@@ -14,6 +14,7 @@ clap = { version = "4.5", features = ["derive"] }
 thiserror = "2.0"
 anyhow = "1.0"
 uuid = "1.0"
+dirs = "6.0"
 
 # Crypto
 aes = "0.8"
@@ -35,6 +36,7 @@ windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "W
 tray-icon = "0.19"
 muda = "0.15"
 global-hotkey = "0.6"
+gtk = "0.18"
 
 [profile.release]
 opt-level = "z"

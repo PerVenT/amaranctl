@@ -1,0 +1,12 @@
+[Unit]
+Description=Amaran 60x S BLE Mesh Controller
+After=bluetooth.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/amaranctl run
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
