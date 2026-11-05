@@ -13,6 +13,9 @@ pub struct Cli {
     #[arg(short, long, help = "Path to config.json")]
     pub config: Option<PathBuf>,
 
+    #[arg(long, hide = true)]
+    pub daemon_worker: bool,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }

@@ -25,3 +25,11 @@ fn test_cli_cct() {
     let cli = Cli::parse_from(args);
     assert_eq!(cli.command, Some(Commands::Cct { kelvin: 5600 }));
 }
+
+#[test]
+fn test_cli_daemon_worker_flag() {
+    let args = vec!["amaranctl", "--daemon-worker"];
+    let cli = Cli::parse_from(args);
+    assert!(cli.daemon_worker);
+    assert_eq!(cli.command, None);
+}
