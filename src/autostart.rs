@@ -57,7 +57,7 @@ pub fn set_autostart(enable: bool) -> Result<()> {
     if enable {
         let exe = env::current_exe().context("failed to get current executable path")?;
         let exe_str = exe.to_string_lossy().to_string();
-        let val = format!("\"{}\"", exe_str);
+        let val = format!("\"{}\" run", exe_str);
 
         let status = Command::new("reg")
             .args([

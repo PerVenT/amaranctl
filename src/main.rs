@@ -6,6 +6,9 @@ use std::path::PathBuf;
 use amaranctl::ble::BleMeshClient;
 use amaranctl::cli::{Cli, Commands};
 use amaranctl::config::AppConfig;
+use amaranctl::daemon::is_daemon_running;
+#[cfg(windows)]
+use amaranctl::daemon::spawn_detached_daemon;
 use amaranctl::ipc::{send_ipc_command, IpcCommand};
 use amaranctl::tray::run_tray_app;
 
@@ -65,7 +68,18 @@ fn load_or_auto_import_config(custom: Option<PathBuf>) -> Result<AppConfig> {
 fn main() -> Result<()> {
     let args = Cli::parse();
 
-    // Check if command can be dispatched to running background daemon via IPC
+    // 1. If invoked as the detached background worker or with --foreground, run the tray app directly
+    if args.daemon_worker {
+        let config = load_or_auto_import_config(args.config)?;
+        return run_tray_app(config);
+    }
+
+    if let Some(Commands::Run { foreground: true }) = args.command {
+        let config = load_or_auto_import_config(args.config)?;
+        return run_tray_app(config);
+    }
+
+    // 2. Check if command can be dispatched to running background daemon via IPC
     let maybe_ipc = match &args.command {
         Some(Commands::On) => Some(IpcCommand::On),
         Some(Commands::Off) => Some(IpcCommand::Off),
@@ -80,7 +94,7 @@ fn main() -> Result<()> {
             .enable_all()
             .build()?;
 
-        // 1. Try sending to background daemon (instant: ~30ms)
+        // A. Try sending to background daemon (instant: ~15ms)
         if let Ok(res) = rt.block_on(send_ipc_command(&cmd)) {
             if let Some(msg) = res.message {
                 println!("{}", msg);
@@ -90,7 +104,7 @@ fn main() -> Result<()> {
             return Ok(());
         }
 
-        // 2. Fallback: daemon not running, connect directly via BLE
+        // B. Fallback: daemon not running, connect directly via BLE
         println!("Background daemon not running, connecting to Amaran directly...");
         let config = load_or_auto_import_config(args.config)?;
         rt.block_on(async {
@@ -134,7 +148,36 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // Default: Run system tray daemon
+    // 3. User invoked `amaranctl run` or `amaranctl` (no subcommands):
+    // Check if background daemon is already running via IPC ping
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+
+    if rt.block_on(is_daemon_running()) {
+        println!("amaranctl background daemon is already running.");
+        return Ok(());
+    }
+
+    #[cfg(windows)]
+    {
+        // On Windows: Daemon is not running, spawn detached background child process
+        let config_abs = args
+            .config
+            .as_ref()
+            .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()));
+
+        match spawn_detached_daemon(config_abs.as_deref()) {
+            Ok(pid) => {
+                println!("amaranctl background daemon started (PID: {}).", pid);
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("[!] Warning: Failed to spawn detached background daemon: {}. Falling back to foreground.", e);
+            }
+        }
+    }
+
     let config = load_or_auto_import_config(args.config)?;
     run_tray_app(config)?;
     Ok(())

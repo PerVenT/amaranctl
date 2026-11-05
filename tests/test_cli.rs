@@ -33,3 +33,14 @@ fn test_cli_daemon_worker_flag() {
     assert!(cli.daemon_worker);
     assert_eq!(cli.command, None);
 }
+
+#[test]
+fn test_cli_run_command() {
+    let args = vec!["amaranctl", "run"];
+    let cli = Cli::parse_from(args);
+    assert_eq!(cli.command, Some(Commands::Run { foreground: false }));
+
+    let args = vec!["amaranctl", "run", "--foreground"];
+    let cli = Cli::parse_from(args);
+    assert_eq!(cli.command, Some(Commands::Run { foreground: true }));
+}

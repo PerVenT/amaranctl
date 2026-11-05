@@ -39,5 +39,8 @@ pub enum Commands {
         kelvin: u16,
     },
     #[command(about = "Run background daemon with tray icon and global hotkeys")]
-    Run,
+    Run {
+        #[arg(short, long, help = "Run in foreground without detaching")]
+        foreground: bool,
+    },
 }
