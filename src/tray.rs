@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use global_hotkey::HotKeyState;
 use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tokio::sync::mpsc;
 #[cfg(not(windows))]
@@ -210,6 +211,9 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
                 // Handle Hotkey Events
                 if let Some(ref hk) = hotkeys {
                     while let Ok(event) = hotkey_receiver.try_recv() {
+                        if event.state != HotKeyState::Pressed {
+                            continue;
+                        }
                         if event.id == hk.toggle_id {
                             let _ = tx.send(AppAction::TogglePower);
                         } else if event.id == hk.bright_up_id {
@@ -263,6 +267,9 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
 
             if let Some(ref hk) = hotkeys {
                 while let Ok(event) = hotkey_receiver.try_recv() {
+                    if event.state != HotKeyState::Pressed {
+                        continue;
+                    }
                     if event.id == hk.toggle_id {
                         let _ = tx.send(AppAction::TogglePower);
                     } else if event.id == hk.bright_up_id {
