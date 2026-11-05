@@ -1,13 +1,13 @@
 use anyhow::Result;
 use global_hotkey::HotKeyState;
 use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
-use tokio::sync::mpsc;
-#[cfg(not(windows))]
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::{mpsc, RwLock};
 use tray_icon::{Icon, TrayIconBuilder};
 
 use crate::autostart::{is_autostart_enabled, set_autostart};
-use crate::ble::BleMeshClient;
+use crate::ble::{BleMeshClient, LampStatus};
 use crate::config::AppConfig;
 use crate::hotkeys::HotkeyBindings;
 
@@ -18,27 +18,79 @@ pub enum AppAction {
     AdjustBrightness(f32),
     SetCct(u16),
     AdjustCct(i32),
+    PollStatus,
     Quit,
 }
 
-pub fn create_default_icon() -> Icon {
+pub fn cct_to_rgb(kelvin: u16) -> (u8, u8, u8) {
+    let k = kelvin.clamp(2700, 6500);
+    if k <= 4500 {
+        let t = (k - 2700) as f32 / (4500 - 2700) as f32;
+        let r = (255.0 + (255.0 - 255.0) * t).round() as u8;
+        let g = (170.0 + (244.0 - 170.0) * t).round() as u8;
+        let b = (51.0 + (224.0 - 51.0) * t).round() as u8;
+        (r, g, b)
+    } else {
+        let t = (k - 4500) as f32 / (6500 - 4500) as f32;
+        let r = (255.0 + (204.0 - 255.0) * t).round() as u8;
+        let g = (244.0 + (230.0 - 244.0) * t).round() as u8;
+        let b = (224.0 + (255.0 - 224.0) * t).round() as u8;
+        (r, g, b)
+    }
+}
+
+pub fn create_adaptive_icon(status: &LampStatus, frame: u32) -> Icon {
     let width = 32u32;
     let height = 32u32;
     let mut rgba = Vec::with_capacity((width * height * 4) as usize);
 
+    let (base_r, base_g, base_b) = if status.connecting {
+        let val = match frame % 4 {
+            0 => 100u8,
+            1 => 180u8,
+            2 => 255u8,
+            _ => 180u8,
+        };
+        (val, val, val)
+    } else if !status.connected {
+        // Disconnected: Dim gray
+        (60, 60, 60)
+    } else if !status.power {
+        // Connected OFF: Dim gray
+        (60, 60, 60)
+    } else {
+        // Connected ON: CCT-tinted color
+        cct_to_rgb(status.cct)
+    };
+
+    let show_disconnect_dot = !status.connected && !status.connecting;
+
     for y in 0..height {
         for x in 0..width {
+            // Check for red disconnect badge at bottom right
+            if show_disconnect_dot {
+                let dx_dot = (x as f32) - 23.5;
+                let dy_dot = (y as f32) - 23.5;
+                let dist_dot = (dx_dot * dx_dot + dy_dot * dy_dot).sqrt();
+                if dist_dot <= 4.0 {
+                    rgba.extend_from_slice(&[231, 76, 60, 255]);
+                    continue;
+                } else if dist_dot <= 5.0 {
+                    let alpha = ((5.0 - dist_dot) * 255.0) as u8;
+                    rgba.extend_from_slice(&[231, 76, 60, alpha]);
+                    continue;
+                }
+            }
+
             let dx = (x as f32) - 15.5;
             let dy = (y as f32) - 15.5;
             let dist = (dx * dx + dy * dy).sqrt();
 
             if dist <= 12.0 {
-                // Golden warm lightbulb color (RGBA: 255, 204, 0, 255)
-                rgba.extend_from_slice(&[255, 204, 0, 255]);
+                rgba.extend_from_slice(&[base_r, base_g, base_b, 255]);
             } else if dist <= 13.5 {
-                // Anti-aliased border
                 let alpha = ((13.5 - dist) / 1.5 * 255.0) as u8;
-                rgba.extend_from_slice(&[255, 204, 0, alpha]);
+                rgba.extend_from_slice(&[base_r, base_g, base_b, alpha]);
             } else {
                 rgba.extend_from_slice(&[0, 0, 0, 0]);
             }
@@ -48,13 +100,20 @@ pub fn create_default_icon() -> Icon {
     Icon::from_rgba(rgba, width, height).expect("valid 32x32 icon")
 }
 
+pub fn create_default_icon() -> Icon {
+    let status = LampStatus::default();
+    create_adaptive_icon(&status, 0)
+}
+
 pub fn run_tray_app(config: AppConfig) -> Result<()> {
     #[cfg(target_os = "linux")]
     {
         let _ = gtk::init();
     }
 
-    let icon = create_default_icon();
+    let shared_status = Arc::new(RwLock::new(LampStatus::default()));
+    let initial_status = LampStatus::default();
+    let icon = create_adaptive_icon(&initial_status, 0);
     let tray_menu = Menu::new();
 
     let header = MenuItem::with_id("status", "amaranctl: Amaran 60x S", false, None);
@@ -97,9 +156,9 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
     tray_menu.append(&sep3)?;
     tray_menu.append(&quit)?;
 
-    let _tray_icon = match TrayIconBuilder::new()
+    let tray_icon = match TrayIconBuilder::new()
         .with_menu(Box::new(tray_menu))
-        .with_tooltip("amaranctl - Amaran 60x S Controller")
+        .with_tooltip(initial_status.tooltip_text())
         .with_icon(icon)
         .build()
     {
@@ -115,6 +174,7 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
     // Spawn async background worker thread for BLE
     let (tx, mut rx) = mpsc::unbounded_channel::<AppAction>();
     let tx_worker = tx.clone();
+    let shared_status_worker = shared_status.clone();
 
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -124,7 +184,10 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
 
         rt.block_on(async move {
             let mut client = match BleMeshClient::new(config) {
-                Ok(c) => c,
+                Ok(mut c) => {
+                    c.status = shared_status_worker.clone();
+                    c
+                }
                 Err(e) => {
                     eprintln!("Error creating BLE client: {:?}", e);
                     return;
@@ -133,10 +196,12 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
 
             // Spawn IPC server IMMEDIATELY so IPC is available from millisecond 1
             let tx_ipc = tx_worker.clone();
+            let shared_status_ipc = shared_status_worker.clone();
             tokio::spawn(async move {
                 use crate::ipc::{IpcCommand, IpcResponse, IpcServer};
                 let _ = IpcServer::run(move |cmd| {
                     let tx = tx_ipc.clone();
+                    let status_ref = shared_status_ipc.clone();
                     async move {
                         match cmd {
                             IpcCommand::On => {
@@ -159,6 +224,11 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
                                 let _ = tx.send(AppAction::SetCct(val));
                                 IpcResponse { ok: true, message: Some(format!("CCT set to {}K", val)) }
                             }
+                            IpcCommand::Status => {
+                                let s = status_ref.read().await.clone();
+                                let json_str = serde_json::to_string(&s).unwrap_or_else(|_| "{}".into());
+                                IpcResponse { ok: true, message: Some(json_str) }
+                            }
                             IpcCommand::Ping => {
                                 IpcResponse { ok: true, message: Some("pong".into()) }
                             }
@@ -170,32 +240,46 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
             // Attempt initial connection in background
             let _ = client.ensure_connected().await;
 
-            while let Some(action) = rx.recv().await {
-                match action {
-                    AppAction::SetPower(on) => {
-                        let _ = client.set_power(on).await;
+            let mut poll_interval = tokio::time::interval(Duration::from_secs(2));
+
+            loop {
+                tokio::select! {
+                    _ = poll_interval.tick() => {
+                        if client.is_connected().await {
+                            let _ = client.poll_status().await;
+                        }
                     }
-                    AppAction::TogglePower => {
-                        let new_state = !client.last_power;
-                        let _ = client.set_power(new_state).await;
+                    Some(action) = rx.recv() => {
+                        match action {
+                            AppAction::SetPower(on) => {
+                                let _ = client.set_power(on).await;
+                            }
+                            AppAction::TogglePower => {
+                                let cur_power = client.status.read().await.power;
+                                let _ = client.set_power(!cur_power).await;
+                            }
+                            AppAction::SetBrightness(val) => {
+                                let _ = client.set_brightness(val).await;
+                            }
+                            AppAction::AdjustBrightness(delta) => {
+                                let cur_percent = client.status.read().await.brightness;
+                                let new_val = (cur_percent + delta).clamp(0.0, 100.0);
+                                let _ = client.set_brightness(new_val).await;
+                            }
+                            AppAction::SetCct(k) => {
+                                let _ = client.set_cct(k).await;
+                            }
+                            AppAction::AdjustCct(delta) => {
+                                let cur = client.status.read().await.cct as i32;
+                                let new_k = (cur + delta).clamp(2700, 6500) as u16;
+                                let _ = client.set_cct(new_k).await;
+                            }
+                            AppAction::PollStatus => {
+                                let _ = client.poll_status().await;
+                            }
+                            AppAction::Quit => break,
+                        }
                     }
-                    AppAction::SetBrightness(val) => {
-                        let _ = client.set_brightness(val).await;
-                    }
-                    AppAction::AdjustBrightness(delta) => {
-                        let cur_percent = (client.last_brightness as f32) / 10.0;
-                        let new_val = (cur_percent + delta).clamp(0.0, 100.0);
-                        let _ = client.set_brightness(new_val).await;
-                    }
-                    AppAction::SetCct(k) => {
-                        let _ = client.set_cct(k).await;
-                    }
-                    AppAction::AdjustCct(delta) => {
-                        let cur = client.last_cct as i32;
-                        let new_k = (cur + delta).clamp(2700, 6500) as u16;
-                        let _ = client.set_cct(new_k).await;
-                    }
-                    AppAction::Quit => break,
                 }
             }
         });
@@ -203,6 +287,10 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
 
     let menu_receiver = MenuEvent::receiver();
     let hotkey_receiver = global_hotkey::GlobalHotKeyEvent::receiver();
+
+    let mut last_rendered_status = LampStatus::default();
+    let mut anim_frame: u32 = 0;
+    let mut last_anim_tick = Instant::now();
 
     // Platform message loop
     #[cfg(windows)]
@@ -227,7 +315,12 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
                 // Handle Menu Events
                 while let Ok(event) = menu_receiver.try_recv() {
                     match event.id.0.as_str() {
-                        "toggle" => { let _ = tx.send(AppAction::TogglePower); }
+                        "toggle" => {
+                            let is_connecting = shared_status.try_read().map(|s| s.connecting).unwrap_or(false);
+                            if !is_connecting {
+                                let _ = tx.send(AppAction::TogglePower);
+                            }
+                        }
                         "b_10" => { let _ = tx.send(AppAction::SetBrightness(10.0)); }
                         "b_25" => { let _ = tx.send(AppAction::SetBrightness(25.0)); }
                         "b_50" => { let _ = tx.send(AppAction::SetBrightness(50.0)); }
@@ -271,6 +364,26 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
                     }
                 }
 
+                // Reactive icon & tooltip update
+                if let Ok(guard) = shared_status.try_read() {
+                    let cur = guard.clone();
+                    let is_connecting = cur.connecting;
+                    let should_update_anim = is_connecting && last_anim_tick.elapsed() >= Duration::from_millis(400);
+                    let status_changed = cur != last_rendered_status;
+
+                    if status_changed || should_update_anim {
+                        if should_update_anim {
+                            anim_frame = anim_frame.wrapping_add(1);
+                            last_anim_tick = Instant::now();
+                        }
+                        if let Some(ref ti) = tray_icon {
+                            let _ = ti.set_icon(Some(create_adaptive_icon(&cur, anim_frame)));
+                            let _ = ti.set_tooltip(Some(cur.tooltip_text()));
+                        }
+                        last_rendered_status = cur;
+                    }
+                }
+
                 MsgWaitForMultipleObjects(0, std::ptr::null(), 0, 50, QS_ALLINPUT);
             }
         }
@@ -285,7 +398,12 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
 
             while let Ok(event) = menu_receiver.try_recv() {
                 match event.id.0.as_str() {
-                    "toggle" => { let _ = tx.send(AppAction::TogglePower); }
+                    "toggle" => {
+                        let is_connecting = shared_status.try_read().map(|s| s.connecting).unwrap_or(false);
+                        if !is_connecting {
+                            let _ = tx.send(AppAction::TogglePower);
+                        }
+                    }
                     "b_10" => { let _ = tx.send(AppAction::SetBrightness(10.0)); }
                     "b_25" => { let _ = tx.send(AppAction::SetBrightness(25.0)); }
                     "b_50" => { let _ = tx.send(AppAction::SetBrightness(50.0)); }
@@ -325,6 +443,26 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
                     } else if event.id == hk.cct_down_id {
                         let _ = tx.send(AppAction::AdjustCct(-500));
                     }
+                }
+            }
+
+            // Reactive icon & tooltip update
+            if let Ok(guard) = shared_status.try_read() {
+                let cur = guard.clone();
+                let is_connecting = cur.connecting;
+                let should_update_anim = is_connecting && last_anim_tick.elapsed() >= Duration::from_millis(400);
+                let status_changed = cur != last_rendered_status;
+
+                if status_changed || should_update_anim {
+                    if should_update_anim {
+                        anim_frame = anim_frame.wrapping_add(1);
+                        last_anim_tick = Instant::now();
+                    }
+                    if let Some(ref ti) = tray_icon {
+                        let _ = ti.set_icon(Some(create_adaptive_icon(&cur, anim_frame)));
+                        let _ = ti.set_tooltip(Some(cur.tooltip_text()));
+                    }
+                    last_rendered_status = cur;
                 }
             }
 

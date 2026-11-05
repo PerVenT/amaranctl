@@ -11,6 +11,7 @@ pub enum IpcCommand {
     Toggle,
     Brightness(f32),
     Cct(u16),
+    Status,
     Ping,
 }
 
