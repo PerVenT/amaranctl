@@ -1,0 +1,43 @@
+[package]
+name = "amaranctl"
+version = "0.1.0"
+edition = "2021"
+authors = ["User"]
+description = "Lightweight Bluetooth Mesh controller for Aputure Amaran 60x S"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+hex = "0.4"
+clap = { version = "4.5", features = ["derive"] }
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Crypto
+aes = "0.8"
+cmac = "0.7"
+ccm = { version = "0.5", features = ["alloc"] }
+subtle = "2.6"
+
+# BLE
+btleplug = "0.11"
+
+# Tray and Hotkeys
+[target.'cfg(windows)'.dependencies]
+tray-icon = "0.19"
+muda = "0.15"
+global-hotkey = "0.6"
+windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_System_Registry"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tray-icon = "0.19"
+muda = "0.15"
+global-hotkey = "0.6"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
