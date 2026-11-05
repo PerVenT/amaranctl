@@ -4,7 +4,7 @@
 
 **Goal:** Implement bi-directional Bluetooth Mesh communication for `amaranctl` to capture live lamp status, display an adaptive tray icon and tooltip reflecting connection/power/CCT state, support the `amaranctl status [--json]` command, and enable relative adjustments (`+`/`-`).
 
-**Architecture:** Inbound BLE notifications on characteristic `0x2A9E` are decrypted via AES-CCM (Network + Access layers) and decoded into `LampStatus`. The background daemon polls status every 4 seconds, maintaining an `Arc<RwLock<LampStatus>>` cache that renders dynamic 32x32 RGBA tray icons (CCT tinted when ON, pulsing when connecting, gray when OFF, red dot when disconnected) and services CLI `status` requests via IPC in <20 ms.
+**Architecture:** Inbound BLE notifications on characteristic `0x2A9E` are decrypted via AES-CCM (Network + Access layers) and decoded into `LampStatus`. The background daemon polls status every 2 seconds, maintaining an `Arc<RwLock<LampStatus>>` cache that renders dynamic 32x32 RGBA tray icons (CCT tinted when ON, pulsing when connecting, gray when OFF, red dot when disconnected) and services CLI `status` requests via IPC in <20 ms.
 
 **Tech Stack:** Rust (2021), AES-CCM (`ccm`, `aes`), Tokio, `tray-icon`, Windows API (`CREATE_NO_WINDOW`, `DETACHED_PROCESS`).
 
@@ -102,6 +102,7 @@ Expected: PASS (all tests green).
 - Produces: `pub struct LampStatus { pub connected: bool, pub connecting: bool, pub power: bool, pub brightness: f32, pub cct: u16 }`
 - Produces: `BleMeshClient::current_status(&self) -> LampStatus`
 - Produces: `BleMeshClient::subscribe_notifications(&mut self) -> Result<()>`
+- Produces: 2-second periodic status polling loop.
 
 - [ ] **Step 1: Write unit test for `LampStatus` tracking in `tests/test_ble.rs`**
 
@@ -155,7 +156,7 @@ Expected: PASS.
 - Consumes: `BleMeshClient` / `LampStatus`
 - Produces: `pub fn create_adaptive_icon(status: &LampStatus, frame: u32) -> Icon`
 - Produces: 400ms animation timer for connecting state.
-- Produces: 4s status polling loop.
+- Produces: 2s status polling loop.
 
 - [ ] **Step 1: Write helper function & test for CCT color interpolation**
 
@@ -171,7 +172,7 @@ Expected: PASS.
 - [ ] **Step 2: Update `run_tray_app` in `src/tray.rs`**
 
 - Replace static icon creation with reactive updater channel.
-- Every 4 seconds, send `AppAction::PollStatus` to BLE worker.
+- Every 2 seconds, send `AppAction::PollStatus` to BLE worker.
 - When `StatusUpdate(status)` is received:
   - Update `tray_icon.set_icon(create_adaptive_icon(&status, frame))`.
   - Update `tray_icon.set_tooltip(status.tooltip_text())`.
