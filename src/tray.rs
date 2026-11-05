@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use global_hotkey::HotKeyState;
 use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tokio::sync::mpsc;
@@ -49,11 +49,6 @@ pub fn create_default_icon() -> Icon {
 }
 
 pub fn run_tray_app(config: AppConfig) -> Result<()> {
-    #[cfg(windows)]
-    unsafe {
-        windows_sys::Win32::System::Console::FreeConsole();
-    }
-
     #[cfg(target_os = "linux")]
     {
         let _ = gtk::init();
@@ -102,12 +97,18 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
     tray_menu.append(&sep3)?;
     tray_menu.append(&quit)?;
 
-    let _tray_icon = TrayIconBuilder::new()
+    let _tray_icon = match TrayIconBuilder::new()
         .with_menu(Box::new(tray_menu))
         .with_tooltip("amaranctl - Amaran 60x S Controller")
         .with_icon(icon)
         .build()
-        .context("failed to build tray icon")?;
+    {
+        Ok(ti) => Some(ti),
+        Err(e) => {
+            eprintln!("[warn] System tray icon could not be created ({:?}). Running in background daemon mode.", e);
+            None
+        }
+    };
 
     let hotkeys = HotkeyBindings::new().ok();
 

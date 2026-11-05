@@ -37,8 +37,8 @@ No Python, Node.js, or compiler toolchains are required. Everything is handled a
 Amaran lights communicate over an encrypted Bluetooth connection. To send commands, `amaranctl` only needs a configuration file (`~/.config/amaranctl/config.json`) containing your local mesh key.
 
 1. **Step 1:** Install the official **Amaran Desktop** application once, log in, and ensure your light appears in your list. (This downloads your light's credentials into your local cache).
-2. **Step 2:** Run the one-line installer command below for your operating system. It parses your existing configuration or automatically extracts your keys from the local database, installs `amaranctl`, and configures autostart.
-3. **Step 3:** You are all set. You can close and uninstall the official 500 MB application.
+2. **Step 2:** Run the one-line installer command below for your operating system. It downloads `amaranctl` and adds it to your system.
+3. **Step 3:** Launch `amaranctl`. On first run, it automatically detects your local database, extracts your mesh credentials into `~/.config/amaranctl/config.json`, and starts up. You can now uninstall or close the official 500 MB application.
 
 > **Configuration validation:** If a configuration file already exists at `~/.config/amaranctl/config.json`, the installer validates it. If valid, database extraction is skipped entirely. If the configuration is corrupted or invalid and a local `amaran.db` is detected, the installer offers to create a backup (`config.json.bak`) and generate a clean configuration.
 
@@ -104,6 +104,9 @@ Launch `amaranctl` (or double-click `amaranctl.exe`). A discreet icon appears in
 ### 2. Terminal Mode (Automation & Streamers)
 
 You can call `amaranctl` directly from any command line prompt, PowerShell, or shell script.
+
+* **Instant execution via IPC (<50 ms):** When `amaranctl` is running in your system tray, terminal commands communicate with the background daemon over a local high-speed IPC channel (`\\.\pipe\amaranctl` on Windows, UNIX domain socket on Linux/macOS). The light adjusts in milliseconds without any BLE scanning delay.
+* **Standalone fallback:** If the tray daemon is not running, the CLI automatically establishes a direct Bluetooth connection, applies your setting, and disconnects cleanly.
 
 #### Commands Reference
 ```bash
