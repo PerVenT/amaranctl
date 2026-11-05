@@ -7,3 +7,4 @@ pub mod hotkeys;
 pub mod tray;
 pub mod sqlite_dyn;
 pub mod ipc;
+pub mod daemon;
