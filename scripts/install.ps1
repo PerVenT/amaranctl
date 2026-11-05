@@ -144,7 +144,9 @@ public class WinSqlite3 {
     if (-not (Test-Path $dir)) {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
     }
-    $configObj | ConvertTo-Json -Depth 5 | Set-Content -Path $outPath -Encoding UTF8
+    $jsonText = $configObj | ConvertTo-Json -Depth 5
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($outPath, $jsonText, $utf8NoBom)
     return $configObj
 }
 
@@ -232,6 +234,11 @@ if (Test-Path $localExe) {
     } catch {
         Write-Host "    [!] Could not download automatically. Please place amaranctl.exe in $installDir" -ForegroundColor Yellow
     }
+}
+
+$localBin = "$HOME\.local\bin"
+if (Test-Path $localBin) {
+    Copy-Item -Path $targetExe -Destination "$localBin\amaranctl.exe" -Force -ErrorAction SilentlyContinue
 }
 
 # Add to User PATH if missing

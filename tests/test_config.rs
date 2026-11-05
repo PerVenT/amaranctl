@@ -34,3 +34,20 @@ fn test_parse_config_str() {
     assert_eq!(config.lights[0].name, "test light");
     assert_eq!(config.lights[0].address, 2);
 }
+
+#[test]
+fn test_parse_config_with_utf8_bom() {
+    // UTF-8 BOM is \u{feff} (bytes EF BB BF)
+    let json_with_bom = "\u{feff}{\"meshUuid\":\"1234\",\"netKey\":\"00112233445566778899aabbccddeeff\",\"appKey\":\"ffeeddccbbaa99887766554433221100\",\"lights\":[]}";
+    let config = AppConfig::from_json_str(json_with_bom).expect("BOM should be stripped and parsed cleanly");
+    assert_eq!(config.mesh_uuid, "1234");
+    assert_eq!(config.net_key_bytes().len(), 16);
+}
+
+#[test]
+fn test_empty_config_fails_cleanly() {
+    let empty = "";
+    assert!(AppConfig::from_json_str(empty).is_err());
+    let whitespace = "   \n\t  ";
+    assert!(AppConfig::from_json_str(whitespace).is_err());
+}

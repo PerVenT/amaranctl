@@ -3,7 +3,7 @@
 use anyhow::Result;
 use clap::Parser;
 use std::env;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use amaranctl::ble::BleMeshClient;
 use amaranctl::cli::{Cli, Commands};
@@ -23,55 +23,64 @@ fn attach_parent_console_if_cli() {
     }
 }
 
-fn find_config_path(custom: Option<PathBuf>) -> Result<PathBuf> {
+fn load_or_auto_import_config(custom: Option<PathBuf>) -> Result<AppConfig> {
     if let Some(p) = custom {
         if p.exists() {
-            return Ok(p);
+            return AppConfig::load_from_path(&p);
         }
         anyhow::bail!("Config file not found at: {:?}", p);
     }
 
+    let mut candidates = Vec::new();
+
     // 1. Current directory
-    let local = Path::new("config.json");
-    if local.exists() {
-        return Ok(local.to_path_buf());
-    }
+    candidates.push(PathBuf::from("config.json"));
 
     // 2. Next to executable
     if let Ok(exe) = env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let exe_cfg = dir.join("config.json");
-            if exe_cfg.exists() {
-                return Ok(exe_cfg);
-            }
+            candidates.push(dir.join("config.json"));
         }
     }
 
     // 3. ~/.config/amaranctl/config.json (cross-platform home directory)
     if let Some(home) = dirs::home_dir() {
-        let home_cfg = home.join(".config").join("amaranctl").join("config.json");
-        if home_cfg.exists() {
-            return Ok(home_cfg);
-        }
+        candidates.push(home.join(".config").join("amaranctl").join("config.json"));
     }
 
     // 4. User standard config directory (e.g. %APPDATA% on Windows, ~/.config on Linux)
     if let Some(cfg_dir) = dirs::config_dir() {
-        let app_cfg = cfg_dir.join("amaranctl/config.json");
-        if app_cfg.exists() {
-            return Ok(app_cfg);
+        candidates.push(cfg_dir.join("amaranctl").join("config.json"));
+    }
+
+    for path in &candidates {
+        if path.exists() {
+            match AppConfig::load_from_path(path) {
+                Ok(cfg) => return Ok(cfg),
+                Err(e) => {
+                    eprintln!("[!] Warning: Could not parse config at {:?}: {}", path, e);
+                }
+            }
         }
     }
 
-    anyhow::bail!("Could not find config.json. Place config.json next to the executable or specify --config <path>")
+    // 5. If no valid config file found anywhere, attempt auto-import from amaran.db!
+    match AppConfig::try_auto_import_from_db() {
+        Ok(cfg) => return Ok(cfg),
+        Err(_) => {}
+    }
+
+    anyhow::bail!(
+        "Could not find valid config.json or amaran.db.\n\
+         Please make sure Amaran Desktop is installed and logged in, or place config.json in ~/.config/amaranctl/config.json"
+    )
 }
 
 fn main() -> Result<()> {
     attach_parent_console_if_cli();
 
     let args = Cli::parse();
-    let config_path = find_config_path(args.config)?;
-    let config = AppConfig::load_from_path(&config_path)?;
+    let config = load_or_auto_import_config(args.config)?;
 
     match args.command {
         Some(Commands::On) => {
