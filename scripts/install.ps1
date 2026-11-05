@@ -8,37 +8,54 @@ Write-Host "       amaranctl Windows Installer        " -ForegroundColor Cyan
 Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host ""
 
-# 1. Locate amaran.db
-Write-Host "[1/5] Searching for Amaran Desktop database..." -ForegroundColor Yellow
-$searchBase = "$env:APPDATA\amaran Desktop"
-$dbPath = $null
+$configDir  = "$HOME\.config\amaranctl"
+$configPath = "$configDir\config.json"
 
-if (Test-Path $searchBase) {
-    $found = Get-ChildItem -Path $searchBase -Filter "amaran.db" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($found) {
-        $dbPath = $found.FullName
+function Test-AmaranConfig([string]$path) {
+    try {
+        if (-not (Test-Path $path)) {
+            return @{ Valid = $false; Error = "File does not exist" }
+        }
+        $raw = Get-Content -Path $path -Raw -ErrorAction Stop
+        $obj = ConvertFrom-Json $raw -ErrorAction Stop
+
+        if (-not $obj.meshUuid -or -not ($obj.meshUuid -is [string]) -or $obj.meshUuid.Trim() -eq "") {
+            return @{ Valid = $false; Error = "Missing or empty 'meshUuid'" }
+        }
+        if (-not $obj.netKey -or -not ($obj.netKey -is [string]) -or $obj.netKey.Trim().Length -ne 32) {
+            return @{ Valid = $false; Error = "Invalid 'netKey' (expected 32 hex chars)" }
+        }
+        if (-not $obj.appKey -or -not ($obj.appKey -is [string]) -or $obj.appKey.Trim().Length -ne 32) {
+            return @{ Valid = $false; Error = "Invalid 'appKey' (expected 32 hex chars)" }
+        }
+        if (-not $obj.lights -or ($obj.lights.Count -eq 0)) {
+            return @{ Valid = $false; Error = "No light fixtures configured in 'lights'" }
+        }
+        foreach ($light in $obj.lights) {
+            if (-not $light.mac -or -not $light.address) {
+                return @{ Valid = $false; Error = "Light fixture missing required 'mac' or 'address'" }
+            }
+        }
+        return @{ Valid = $true; Config = $obj }
+    } catch {
+        return @{ Valid = $false; Error = "JSON parsing error: $_" }
     }
 }
 
-if (-not $dbPath -or -not (Test-Path $dbPath)) {
-    Write-Host "[!] Could not find amaran.db automatically." -ForegroundColor Red
-    Write-Host "    Make sure you have installed 'Amaran Desktop' and logged into your account once."
-    $manual = Read-Host "    Or enter path to amaran.db manually (press Enter to cancel)"
-    if ($manual -and (Test-Path $manual)) {
-        $dbPath = $manual
-    } else {
-        Write-Host "Aborted. Please install Amaran Desktop and log in first." -ForegroundColor Red
-        exit 1
+function Find-AmaranDb {
+    $searchBase = "$env:APPDATA\amaran Desktop"
+    if (Test-Path $searchBase) {
+        $found = Get-ChildItem -Path $searchBase -Filter "amaran.db" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($found) {
+            return $found.FullName
+        }
     }
+    return $null
 }
 
-Write-Host "    Found database: $dbPath" -ForegroundColor Green
-
-# 2. Extract credentials using native winsqlite3.dll
-Write-Host "[2/5] Extracting Bluetooth Mesh credentials..." -ForegroundColor Yellow
-
-if (-not ([System.Management.Automation.PSTypeName]'WinSqlite3').Type) {
-    $csharp = @"
+function Extract-Credentials([string]$dbPath, [string]$outPath) {
+    if (-not ([System.Management.Automation.PSTypeName]'WinSqlite3').Type) {
+        $csharp = @"
 using System;
 using System.Runtime.InteropServices;
 
@@ -65,111 +82,159 @@ public class WinSqlite3 {
     public static extern int Finalize(IntPtr stmt);
 }
 "@
-    Add-Type -TypeDefinition $csharp
-}
+        Add-Type -TypeDefinition $csharp
+    }
 
-$dbPtr = [IntPtr]::Zero
-$openRes = [WinSqlite3]::Open($dbPath, [ref]$dbPtr)
-if ($openRes -ne 0) {
-    Write-Error "Failed to open SQLite database at $dbPath"
-    exit 1
-}
+    $dbPtr = [IntPtr]::Zero
+    $openRes = [WinSqlite3]::Open($dbPath, [ref]$dbPtr)
+    if ($openRes -ne 0) {
+        Write-Error "Failed to open SQLite database at $dbPath"
+        exit 1
+    }
 
-# Read mesh table
-$meshStmt = [IntPtr]::Zero
-$prepRes = [WinSqlite3]::Prepare($dbPtr, "SELECT uuid, net_key, app_key FROM mesh LIMIT 1;", -1, [ref]$meshStmt, [IntPtr]::Zero)
-if ($prepRes -ne 0 -or [WinSqlite3]::Step($meshStmt) -ne 100) {
+    # Read mesh credentials
+    $meshStmt = [IntPtr]::Zero
+    $prepRes = [WinSqlite3]::Prepare($dbPtr, "SELECT uuid, net_key, app_key FROM mesh LIMIT 1;", -1, [ref]$meshStmt, [IntPtr]::Zero)
+    if ($prepRes -ne 0 -or [WinSqlite3]::Step($meshStmt) -ne 100) {
+        [WinSqlite3]::Close($dbPtr) | Out-Null
+        Write-Error "Failed to read mesh credentials from database. Is your mesh network configured in Amaran Desktop?"
+        exit 1
+    }
+
+    $meshUuid = [System.Runtime.InteropServices.Marshal]::PtrToStringAnsi([WinSqlite3]::ColumnText($meshStmt, 0))
+    $netKey   = [System.Runtime.InteropServices.Marshal]::PtrToStringAnsi([WinSqlite3]::ColumnText($meshStmt, 1))
+    $appKey   = [System.Runtime.InteropServices.Marshal]::PtrToStringAnsi([WinSqlite3]::ColumnText($meshStmt, 2))
+    [WinSqlite3]::Finalize($meshStmt) | Out-Null
+
+    # Read fixtures
+    $fixStmt = [IntPtr]::Zero
+    $prepRes = [WinSqlite3]::Prepare($dbPtr, "SELECT name, mac_address, node_address, device_key, device_uuid, code FROM fixtures;", -1, [ref]$fixStmt, [IntPtr]::Zero)
+
+    $fixtures = @()
+    if ($prepRes -eq 0) {
+        while ([WinSqlite3]::Step($fixStmt) -eq 100) {
+            $name     = [System.Runtime.InteropServices.Marshal]::PtrToStringAnsi([WinSqlite3]::ColumnText($fixStmt, 0))
+            $mac      = [System.Runtime.InteropServices.Marshal]::PtrToStringAnsi([WinSqlite3]::ColumnText($fixStmt, 1))
+            $nodeAddr = [WinSqlite3]::ColumnInt($fixStmt, 2)
+            $devKey   = [System.Runtime.InteropServices.Marshal]::PtrToStringAnsi([WinSqlite3]::ColumnText($fixStmt, 3))
+            $devUuid  = [System.Runtime.InteropServices.Marshal]::PtrToStringAnsi([WinSqlite3]::ColumnText($fixStmt, 4))
+            $code     = [System.Runtime.InteropServices.Marshal]::PtrToStringAnsi([WinSqlite3]::ColumnText($fixStmt, 5))
+
+            $fixtures += [PSCustomObject]@{
+                name       = $name
+                mac        = $mac
+                address    = $nodeAddr
+                deviceKey  = $devKey
+                deviceUuid = $devUuid
+                code       = $code
+            }
+        }
+        [WinSqlite3]::Finalize($fixStmt) | Out-Null
+    }
     [WinSqlite3]::Close($dbPtr) | Out-Null
-    Write-Error "Failed to read mesh credentials from database. Is your mesh network set up?"
-    exit 1
+
+    $configObj = [PSCustomObject]@{
+        meshUuid = $meshUuid
+        netKey   = $netKey
+        appKey   = $appKey
+        lights   = $fixtures
+    }
+
+    $dir = Split-Path -Parent $outPath
+    if (-not (Test-Path $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    $configObj | ConvertTo-Json -Depth 5 | Set-Content -Path $outPath -Encoding UTF8
+    return $configObj
 }
 
-$meshUuid = [System.Runtime.InteropServices.Marshal]::PtrToStringAnsi([WinSqlite3]::ColumnText($meshStmt, 0))
-$netKey   = [System.Runtime.InteropServices.Marshal]::PtrToStringAnsi([WinSqlite3]::ColumnText($meshStmt, 1))
-$appKey   = [System.Runtime.InteropServices.Marshal]::PtrToStringAnsi([WinSqlite3]::ColumnText($meshStmt, 2))
-[WinSqlite3]::Finalize($meshStmt) | Out-Null
+# --- Step 1 & 2: Configuration Check / Extraction ---
+Write-Host "[1/4] Checking configuration ($configPath)..." -ForegroundColor Yellow
 
-# Read fixtures table
-$fixStmt = [IntPtr]::Zero
-$prepRes = [WinSqlite3]::Prepare($dbPtr, "SELECT name, mac_address, node_address, device_key, device_uuid, code FROM fixtures;", -1, [ref]$fixStmt, [IntPtr]::Zero)
+$needsExtraction = $true
 
-$fixtures = @()
-if ($prepRes -eq 0) {
-    while ([WinSqlite3]::Step($fixStmt) -eq 100) {
-        $name     = [System.Runtime.InteropServices.Marshal]::PtrToStringAnsi([WinSqlite3]::ColumnText($fixStmt, 0))
-        $mac      = [System.Runtime.InteropServices.Marshal]::PtrToStringAnsi([WinSqlite3]::ColumnText($fixStmt, 1))
-        $nodeAddr = [WinSqlite3]::ColumnInt($fixStmt, 2)
-        $devKey   = [System.Runtime.InteropServices.Marshal]::PtrToStringAnsi([WinSqlite3]::ColumnText($fixStmt, 3))
-        $devUuid  = [System.Runtime.InteropServices.Marshal]::PtrToStringAnsi([WinSqlite3]::ColumnText($fixStmt, 4))
-        $code     = [System.Runtime.InteropServices.Marshal]::PtrToStringAnsi([WinSqlite3]::ColumnText($fixStmt, 5))
-
-        $fixtures += [PSCustomObject]@{
-            name       = $name
-            mac        = $mac
-            address    = $nodeAddr
-            deviceKey  = $devKey
-            deviceUuid = $devUuid
-            code       = $code
+if (Test-Path $configPath) {
+    $check = Test-AmaranConfig $configPath
+    if ($check.Valid) {
+        Write-Host "    Found existing valid configuration at: $configPath" -ForegroundColor Green
+        Write-Host "    Configured lights ($($check.Config.lights.Count)):" -ForegroundColor Gray
+        foreach ($l in $check.Config.lights) {
+            Write-Host "      - $($l.name) (MAC: $($l.mac), Address: $($l.address))" -ForegroundColor Gray
+        }
+        $needsExtraction = $false
+    } else {
+        Write-Host "    [!] Existing config file is invalid: $($check.Error)" -ForegroundColor Red
+        $dbPath = Find-AmaranDb
+        if ($dbPath) {
+            Write-Host "    Found local database: $dbPath" -ForegroundColor Cyan
+            $replace = Read-Host "    Backup invalid config ($configPath.bak) and extract fresh keys from database? (Y/n)"
+            if ($replace -eq "" -or $replace.ToLower() -eq "y") {
+                Copy-Item -Path $configPath -Destination "$configPath.bak" -Force
+                Write-Host "    Backed up corrupted config to: $configPath.bak" -ForegroundColor Gray
+                $needsExtraction = $true
+            } else {
+                Write-Host "    Keeping current configuration as requested." -ForegroundColor Yellow
+                $needsExtraction = $false
+            }
+        } else {
+            Write-Host "    [!] Could not locate amaran.db to regenerate configuration." -ForegroundColor Red
+            Write-Host "        Please fix $configPath manually or install Amaran Desktop and log in."
+            exit 1
         }
     }
-    [WinSqlite3]::Finalize($fixStmt) | Out-Null
 }
-[WinSqlite3]::Close($dbPtr) | Out-Null
 
-if ($fixtures.Count -eq 0) {
-    Write-Host "[!] Warning: No lights found in fixtures table." -ForegroundColor Yellow
-} else {
-    Write-Host "    Found $($fixtures.Count) light(s):" -ForegroundColor Green
-    foreach ($f in $fixtures) {
-        Write-Host "      - $($f.name) (MAC: $($f.mac), Address: $($f.address))" -ForegroundColor Gray
+if ($needsExtraction) {
+    Write-Host "[2/4] Extracting Bluetooth Mesh credentials from database..." -ForegroundColor Yellow
+    $dbPath = Find-AmaranDb
+    if (-not $dbPath) {
+        Write-Host "    [!] Could not find amaran.db in $env:APPDATA\amaran Desktop" -ForegroundColor Red
+        Write-Host "        Please make sure Amaran Desktop is installed and logged in."
+        $manual = Read-Host "        Or enter path to amaran.db manually (press Enter to cancel)"
+        if ($manual -and (Test-Path $manual)) {
+            $dbPath = $manual
+        } else {
+            Write-Host "    Aborted. No valid configuration or database available." -ForegroundColor Red
+            exit 1
+        }
     }
+
+    Write-Host "    Reading from: $dbPath" -ForegroundColor Green
+    $extracted = Extract-Credentials -dbPath $dbPath -outPath $configPath
+    Write-Host "    Successfully generated: $configPath" -ForegroundColor Green
+    Write-Host "    Configured lights ($($extracted.lights.Count)):" -ForegroundColor Gray
+    foreach ($l in $extracted.lights) {
+        Write-Host "      - $($l.name) (MAC: $($l.mac), Address: $($l.address))" -ForegroundColor Gray
+    }
+} else {
+    Write-Host "[2/4] Configuration ready (skipped database extraction)." -ForegroundColor Green
 }
 
-# 3. Save config.json
-Write-Host "[3/5] Saving configuration..." -ForegroundColor Yellow
-$configDir = "$env:APPDATA\amaranctl"
-if (-not (Test-Path $configDir)) {
-    New-Item -ItemType Directory -Path $configDir -Force | Out-Null
-}
-$configPath = "$configDir\config.json"
-
-$configObj = [PSCustomObject]@{
-    meshUuid = $meshUuid
-    netKey   = $netKey
-    appKey   = $appKey
-    lights   = $fixtures
-}
-
-$configObj | ConvertTo-Json -Depth 5 | Set-Content -Path $configPath -Encoding UTF8
-Write-Host "    Saved config to: $configPath" -ForegroundColor Green
-
-# 4. Install amaranctl binary
-Write-Host "[4/5] Setting up amaranctl executable..." -ForegroundColor Yellow
+# --- Step 3: Install amaranctl binary ---
+Write-Host "[3/4] Setting up amaranctl executable..." -ForegroundColor Yellow
 $installDir = "$env:LOCALAPPDATA\Programs\amaranctl"
 if (-not (Test-Path $installDir)) {
     New-Item -ItemType Directory -Path $installDir -Force | Out-Null
 }
 $targetExe = "$installDir\amaranctl.exe"
 
-# If running from repo root or dist directory, copy existing binary
 $localExe = Join-Path $PSScriptRoot "..\amaranctl.exe"
 if (Test-Path $localExe) {
     Copy-Item -Path $localExe -Destination $targetExe -Force
-    Write-Host "    Copied local binary to: $targetExe" -ForegroundColor Green
+    Write-Host "    Installed binary: $targetExe" -ForegroundColor Green
 } else {
-    # Download latest release from GitHub
-    Write-Host "    Downloading latest amaranctl.exe from GitHub..." -ForegroundColor Cyan
-    $repo = "amaranctl/amaranctl" # Update when official repo is live
+    Write-Host "    Downloading latest amaranctl.exe from GitHub releases..." -ForegroundColor Cyan
+    $repo = "amaranctl/amaranctl"
     $downloadUrl = "https://github.com/$repo/releases/latest/download/amaranctl-windows.exe"
     try {
         Invoke-WebRequest -Uri $downloadUrl -OutFile $targetExe -UseBasicParsing
-        Write-Host "    Downloaded to: $targetExe" -ForegroundColor Green
+        Write-Host "    Downloaded binary: $targetExe" -ForegroundColor Green
     } catch {
-        Write-Host "    Could not download automatically. Please place amaranctl.exe in $installDir" -ForegroundColor Yellow
+        Write-Host "    [!] Could not download automatically. Please place amaranctl.exe in $installDir" -ForegroundColor Yellow
     }
 }
 
-# Add to User PATH if not already present
+# Add to User PATH if missing
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
 if ($userPath -notlike "*$installDir*") {
     [Environment]::SetEnvironmentVariable("Path", "$userPath;$installDir", "User")
@@ -177,19 +242,22 @@ if ($userPath -notlike "*$installDir*") {
     Write-Host "    Added $installDir to User PATH." -ForegroundColor Green
 }
 
-# 5. Autostart setup
-Write-Host "[5/5] Autostart configuration..." -ForegroundColor Yellow
+# --- Step 4: Autostart setup ---
+Write-Host "[4/4] Autostart configuration..." -ForegroundColor Yellow
 $choice = Read-Host "Start amaranctl automatically when you log into Windows? (Y/n)"
 if ($choice -eq "" -or $choice.ToLower() -eq "y") {
     $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
     Set-ItemProperty -Path $regPath -Name "amaranctl" -Value "`"$targetExe`""
-    Write-Host "    Autostart enabled!" -ForegroundColor Green
+    Write-Host "    Autostart enabled in Windows Registry." -ForegroundColor Green
 }
 
 Write-Host ""
 Write-Host "==========================================" -ForegroundColor Green
 Write-Host "        Installation Successful!          " -ForegroundColor Green
 Write-Host "==========================================" -ForegroundColor Green
+Write-Host "Config:  $configPath"
+Write-Host "Binary:  $targetExe"
+Write-Host ""
 Write-Host "Usage:"
 Write-Host "  Tray app:  Run 'amaranctl' or double-click amaranctl.exe"
 Write-Host "  CLI:       amaranctl on | off | toggle | brightness 50 | cct 4500"

@@ -7,45 +7,105 @@ echo "        amaranctl UNIX Installer          "
 echo "=========================================="
 echo ""
 
-# 1. Locate amaran.db
-echo "[1/5] Searching for Amaran Desktop database..."
-DB_PATH=""
+CONFIG_DIR="$HOME/.config/amaranctl"
+CONFIG_FILE="$CONFIG_DIR/config.json"
+mkdir -p "$CONFIG_DIR"
 
-# Search common paths
-SEARCH_DIRS=(
-    "$HOME/Library/Application Support/amaran Desktop"
-    "$HOME/.config/amaran Desktop"
-    "$HOME/.wine/drive_c/users/$USER/AppData/Roaming/amaran Desktop"
-    "$HOME/.var/app"
-)
+# 1. Locate amaran.db helper
+find_amaran_db() {
+    local search_dirs=(
+        "$HOME/Library/Application Support/amaran Desktop"
+        "$HOME/.config/amaran Desktop"
+        "$HOME/.wine/drive_c/users/$USER/AppData/Roaming/amaran Desktop"
+        "$HOME/.var/app"
+    )
+    for dir in "${search_dirs[@]}"; do
+        if [ -d "$dir" ]; then
+            local found
+            found=$(find "$dir" -name "amaran.db" 2>/dev/null | head -n 1)
+            if [ -n "$found" ]; then
+                echo "$found"
+                return 0
+            fi
+        fi
+    done
+    return 1
+}
 
-for dir in "${SEARCH_DIRS[@]}"; do
-    if [ -d "$dir" ]; then
-        FOUND=$(find "$dir" -name "amaran.db" 2>/dev/null | head -n 1)
-        if [ -n "$FOUND" ]; then
-            DB_PATH="$FOUND"
-            break
+# 2. Check existing configuration ("Parse, don't validate")
+echo "[1/4] Checking configuration ($CONFIG_FILE)..."
+NEEDS_EXTRACTION=1
+
+if [ -f "$CONFIG_FILE" ]; then
+    IS_VALID=0
+    if command -v python3 &>/dev/null; then
+        if python3 -c '
+import sys, json
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as f:
+        d = json.load(f)
+    assert d.get("meshUuid") and isinstance(d["meshUuid"], str)
+    assert d.get("netKey") and len(d["netKey"]) == 32
+    assert d.get("appKey") and len(d["appKey"]) == 32
+    assert isinstance(d.get("lights"), list) and len(d["lights"]) > 0
+    for l in d["lights"]:
+        assert l.get("mac") and l.get("address")
+    sys.exit(0)
+except Exception as e:
+    sys.exit(1)
+' "$CONFIG_FILE" 2>/dev/null; then
+            IS_VALID=1
+        fi
+    else
+        # Basic check if python3 is unavailable
+        if grep -q "meshUuid" "$CONFIG_FILE" && grep -q "netKey" "$CONFIG_FILE" && grep -q "appKey" "$CONFIG_FILE"; then
+            IS_VALID=1
         fi
     fi
-done
 
-if [ -z "$DB_PATH" ]; then
-    echo "[!] Could not automatically locate amaran.db."
-    echo "    Make sure Amaran Desktop is installed, or enter path manually:"
-    read -r -p "    Path to amaran.db (or leave blank to skip key extraction): " MANUAL_PATH
-    if [ -n "$MANUAL_PATH" ] && [ -f "$MANUAL_PATH" ]; then
-        DB_PATH="$MANUAL_PATH"
+    if [ "$IS_VALID" -eq 1 ]; then
+        echo "    Found existing valid configuration at: $CONFIG_FILE"
+        echo "    Skipping database extraction."
+        NEEDS_EXTRACTION=0
+    else
+        echo "    [!] Existing config file is invalid or corrupted."
+        DB_PATH=$(find_amaran_db || true)
+        if [ -n "$DB_PATH" ] && [ -f "$DB_PATH" ]; then
+            echo "    Found local database: $DB_PATH"
+            read -r -p "    Backup invalid config ($CONFIG_FILE.bak) and extract fresh keys? (Y/n): " REPLACE_CHOICE
+            REPLACE_CHOICE=${REPLACE_CHOICE:-Y}
+            if [[ "$REPLACE_CHOICE" =~ ^[Yy]$ ]]; then
+                cp "$CONFIG_FILE" "$CONFIG_FILE.bak"
+                echo "    Backed up corrupted config to: $CONFIG_FILE.bak"
+                NEEDS_EXTRACTION=1
+            else
+                echo "    Keeping current configuration as requested."
+                NEEDS_EXTRACTION=0
+            fi
+        else
+            echo "    [!] Could not locate amaran.db to regenerate configuration."
+            echo "        Please fix $CONFIG_FILE manually or install Amaran Desktop."
+            exit 1
+        fi
     fi
 fi
 
-CONFIG_DIR="$HOME/.config/amaranctl"
-mkdir -p "$CONFIG_DIR"
-CONFIG_FILE="$CONFIG_DIR/config.json"
+# 3. Extraction if needed
+if [ "$NEEDS_EXTRACTION" -eq 1 ]; then
+    echo "[2/4] Extracting Bluetooth Mesh credentials from database..."
+    DB_PATH=$(find_amaran_db || true)
+    if [ -z "$DB_PATH" ]; then
+        echo "    [!] Could not automatically locate amaran.db."
+        read -r -p "    Enter path to amaran.db manually (or leave blank to abort): " MANUAL_PATH
+        if [ -n "$MANUAL_PATH" ] && [ -f "$MANUAL_PATH" ]; then
+            DB_PATH="$MANUAL_PATH"
+        else
+            echo "    Aborted. No valid configuration or database found."
+            exit 1
+        fi
+    fi
 
-# 2. Extract keys if DB_PATH found
-if [ -n "$DB_PATH" ]; then
     echo "    Found database: $DB_PATH"
-    echo "[2/5] Extracting Bluetooth Mesh credentials..."
     if command -v python3 &>/dev/null; then
         python3 - "$DB_PATH" "$CONFIG_FILE" << 'EOF'
 import sys, sqlite3, json
@@ -93,22 +153,22 @@ EOF
         echo "{\"meshUuid\":\"$UUID\",\"netKey\":\"$NET_KEY\",\"appKey\":\"$APP_KEY\",\"lights\":[]}" > "$CONFIG_FILE"
         echo "    Saved basic configuration to: $CONFIG_FILE"
     else
-        echo "[!] Warning: Neither python3 nor sqlite3 found. Please extract config.json manually."
+        echo "[!] Error: Neither python3 nor sqlite3 found. Cannot extract from SQLite database."
+        exit 1
     fi
 else
-    echo "[2/5] Skipping key extraction (no database found)."
+    echo "[2/4] Configuration ready (skipped database extraction)."
 fi
 
-# 3. Binary installation
-echo "[3/5] Installing amaranctl binary..."
+# 4. Binary installation
+echo "[3/4] Installing amaranctl binary..."
 BIN_DIR="$HOME/.local/bin"
 mkdir -p "$BIN_DIR"
 TARGET_BIN="$BIN_DIR/amaranctl"
 
 OS_TYPE=$(uname -s)
-ARCH_TYPE=$(uname -m)
-
 REPO="amaranctl/amaranctl"
+
 if [ "$OS_TYPE" = "Linux" ]; then
     DOWNLOAD_URL="https://github.com/$REPO/releases/latest/download/amaranctl-linux-x86_64"
 elif [ "$OS_TYPE" = "Darwin" ]; then
@@ -118,7 +178,7 @@ fi
 if [ -f "./target/release/amaranctl" ]; then
     cp "./target/release/amaranctl" "$TARGET_BIN"
     chmod +x "$TARGET_BIN"
-    echo "    Installed local binary to $TARGET_BIN"
+    echo "    Installed local binary to: $TARGET_BIN"
 else
     echo "    Downloading $DOWNLOAD_URL..."
     if command -v curl &>/dev/null; then
@@ -128,20 +188,19 @@ else
     fi
     if [ -f "$TARGET_BIN" ]; then
         chmod +x "$TARGET_BIN"
-        echo "    Installed binary to $TARGET_BIN"
+        echo "    Installed binary to: $TARGET_BIN"
     else
         echo "[!] Could not download binary automatically. Please place 'amaranctl' into $BIN_DIR"
     fi
 fi
 
-# Ensure ~/.local/bin is in PATH
 if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
     echo "    Note: Add ~/.local/bin to your PATH in ~/.bashrc or ~/.zshrc:"
     echo "          export PATH=\"\$HOME/.local/bin:\$PATH\""
 fi
 
-# 4. Autostart setup
-echo "[4/5] Configuring Autostart..."
+# 5. Autostart setup
+echo "[4/4] Configuring Autostart..."
 if [ "$OS_TYPE" = "Linux" ] && command -v systemctl &>/dev/null; then
     read -r -p "Enable systemd user service for amaranctl background tray? (Y/n): " AUTOSTART_CHOICE
     AUTOSTART_CHOICE=${AUTOSTART_CHOICE:-Y}
@@ -171,6 +230,9 @@ echo ""
 echo "=========================================="
 echo "        Installation Successful!          "
 echo "=========================================="
+echo "Config:  $CONFIG_FILE"
+echo "Binary:  $TARGET_BIN"
+echo ""
 echo "Usage:"
 echo "  Tray app:  amaranctl run"
 echo "  CLI:       amaranctl on | off | toggle | brightness 50 | cct 4500"

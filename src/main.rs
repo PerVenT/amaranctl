@@ -47,7 +47,15 @@ fn find_config_path(custom: Option<PathBuf>) -> Result<PathBuf> {
         }
     }
 
-    // 3. User config directory
+    // 3. ~/.config/amaranctl/config.json (cross-platform home directory)
+    if let Some(home) = dirs::home_dir() {
+        let home_cfg = home.join(".config").join("amaranctl").join("config.json");
+        if home_cfg.exists() {
+            return Ok(home_cfg);
+        }
+    }
+
+    // 4. User standard config directory (e.g. %APPDATA% on Windows, ~/.config on Linux)
     if let Some(cfg_dir) = dirs::config_dir() {
         let app_cfg = cfg_dir.join("amaranctl/config.json");
         if app_cfg.exists() {
