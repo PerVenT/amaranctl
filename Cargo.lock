@@ -48,6 +48,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tray-icon",
+ "uuid",
  "windows-sys 0.59.0",
 ]
 
