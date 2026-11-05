@@ -4,7 +4,7 @@ use std::env;
 use std::path::PathBuf;
 
 use amaranctl::ble::BleMeshClient;
-use amaranctl::cli::{Cli, Commands};
+use amaranctl::cli::{parse_brightness_val, parse_cct_val, Cli, Commands};
 use amaranctl::config::AppConfig;
 use amaranctl::daemon::is_daemon_running;
 #[cfg(windows)]
@@ -83,13 +83,97 @@ fn main() -> Result<()> {
         return run_tray_app(config);
     }
 
-    // 2. Check if command can be dispatched to running background daemon via IPC
+    // 2. Handle Status Command
+    if let Some(Commands::Status { json }) = &args.command {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+
+        // A. Try query from running background daemon via IPC (<20ms)
+        if let Ok(res) = rt.block_on(send_ipc_command(&IpcCommand::Status)) {
+            if let Some(json_str) = res.message {
+                if *json {
+                    println!("{}", json_str);
+                } else if let Ok(s) = serde_json::from_str::<amaranctl::ble::LampStatus>(&json_str) {
+                    if !s.connected {
+                        println!("Amaran 60x S: Disconnected (no link)");
+                    } else if s.power {
+                        println!("Amaran 60x S: ON | Brightness: {:.0}% | CCT: {}K | Connected", s.brightness, s.cct);
+                    } else {
+                        println!("Amaran 60x S: OFF (Ready) | Connected");
+                    }
+                } else {
+                    println!("{}", json_str);
+                }
+                return Ok(());
+            }
+        }
+
+        // B. Fallback: connect directly via BLE
+        let config = load_or_auto_import_config(args.config)?;
+        rt.block_on(async {
+            let mut client = BleMeshClient::new(config)?;
+            client.ensure_connected().await?;
+            let _ = client.poll_status().await;
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            let s = client.current_status().await;
+            if *json {
+                let json_str = serde_json::to_string(&s).unwrap_or_else(|_| "{}".into());
+                println!("{}", json_str);
+            } else if !s.connected {
+                println!("Amaran 60x S: Disconnected (no link)");
+            } else if s.power {
+                println!("Amaran 60x S: ON | Brightness: {:.0}% | CCT: {}K | Connected", s.brightness, s.cct);
+            } else {
+                println!("Amaran 60x S: OFF (Ready) | Connected");
+            }
+            let _ = client.disconnect().await;
+            Ok::<(), anyhow::Error>(())
+        })?;
+        return Ok(());
+    }
+
+    // 3. Check if command can be dispatched to running background daemon via IPC
     let maybe_ipc = match &args.command {
         Some(Commands::On) => Some(IpcCommand::On),
         Some(Commands::Off) => Some(IpcCommand::Off),
         Some(Commands::Toggle) => Some(IpcCommand::Toggle),
-        Some(Commands::Brightness { value }) => Some(IpcCommand::Brightness(*value)),
-        Some(Commands::Cct { kelvin }) => Some(IpcCommand::Cct(*kelvin)),
+        Some(Commands::Brightness { value }) => {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            let current_b = if let Ok(res) = rt.block_on(send_ipc_command(&IpcCommand::Status)) {
+                if let Some(ref j) = res.message {
+                    serde_json::from_str::<amaranctl::ble::LampStatus>(j)
+                        .map(|s| s.brightness)
+                        .unwrap_or(50.0)
+                } else {
+                    50.0
+                }
+            } else {
+                50.0
+            };
+            let target_b = parse_brightness_val(value, current_b)?;
+            Some(IpcCommand::Brightness(target_b))
+        }
+        Some(Commands::Cct { value }) => {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            let current_k = if let Ok(res) = rt.block_on(send_ipc_command(&IpcCommand::Status)) {
+                if let Some(ref j) = res.message {
+                    serde_json::from_str::<amaranctl::ble::LampStatus>(j)
+                        .map(|s| s.cct)
+                        .unwrap_or(5600)
+                } else {
+                    5600
+                }
+            } else {
+                5600
+            };
+            let target_k = parse_cct_val(value, current_k)?;
+            Some(IpcCommand::Cct(target_k))
+        }
         _ => None,
     };
 
@@ -152,7 +236,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // 3. User invoked `amaranctl run` or `amaranctl` (no subcommands):
+    // 4. User invoked `amaranctl run` or `amaranctl` (no subcommands):
     // Check if background daemon is already running via IPC ping
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
