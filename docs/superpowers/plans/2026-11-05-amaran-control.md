@@ -1,8 +1,8 @@
-# Amaran Control (Rust) Implementation Plan
+# Amaranctl (Rust) Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a lightweight, cross-platform Rust background utility and CLI (`amaran-control`) to control an Aputure Amaran 60x S over Bluetooth Low Energy Mesh (Telink opcode `0x26`), supporting system tray, global hotkeys, and autostart on Windows and Linux with memory footprint < 10 MB.
+**Goal:** Build a lightweight, cross-platform Rust background utility and CLI (`amaranctl`) to control an Aputure Amaran 60x S over Bluetooth Low Energy Mesh (Telink opcode `0x26`), supporting system tray, global hotkeys, and autostart on Windows and Linux with memory footprint < 10 MB.
 
 **Architecture:** The core application features a modular design:
 - `src/mesh.rs` implements Bluetooth Mesh cryptographic key derivation (K2, K4), AES-128 CCM/CMAC encryption, network/proxy PDU framing, and Telink vendor opcode `0x26` command packing (On/Off, Brightness, CCT).
@@ -32,7 +32,7 @@
 
 1. Packet sequence numbers (`seq`): Must increment monotonically for each outgoing packet from source address `0x7001` to prevent fixture from silently dropping packets.
 2. Telink CCT formula: Kelvin must be scaled as `((k + 5) / 10)` clamped to `[80, 2000]`, with proper GM tint offset `10`.
-3. Brightness scaling: 0–100% mapped to 0–1000 with lower 2 bits in byte 7 and upper 8 bits in byte 8.
+3. Brightness scaling: User 0–100% mapped to hardware 0–1000 with lower 2 bits in byte 7 and upper 8 bits in byte 8.
 4. Proxy PDU segmentation: Single-segment Access PDU with length <= 15 bytes fits directly in unsegmented network PDU.
 5. Windows Tray and Hotkey message loop: Must run on main thread without blocking async Tokio BLE runtime.
 
@@ -177,7 +177,7 @@ git commit -m "feat: implement ble mesh proxy client using btleplug"
   - `cct <KELVIN>`
 
 - [ ] **Step 1: Implement CLI argument parser using `clap`**
-Support headless one-shot commands (`amaran-control --toggle`, `amaran-control --cct 4500`).
+Support headless one-shot commands (`amaranctl --toggle`, `amaranctl --cct 4500`).
 
 - [ ] **Step 2: Verify CLI dispatch**
 Test parsing and dispatching in dry-run mode.
@@ -233,7 +233,7 @@ git commit -m "feat: implement system tray menu and global hotkeys"
 Read/write registry key under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
 
 - [ ] **Step 2: Create Linux user systemd service template**
-Write `dist/amaran.service` with `ExecStart=%h/.local/bin/amaran-control`.
+Write `dist/amaran.service` with `ExecStart=%h/.local/bin/amaranctl`.
 
 - [ ] **Step 3: Commit**
 ```bash
@@ -251,20 +251,21 @@ git commit -m "feat: add windows registry and linux systemd autostart support"
 
 **Interfaces:**
 - Produces:
-  - `target/x86_64-pc-windows-gnu/release/amaran-control.exe` (< 10 MB)
-  - `target/x86_64-unknown-linux-gnu/release/amaran-control` (< 10 MB)
+  - `target/x86_64-pc-windows-gnu/release/amaranctl.exe` (< 10 MB)
+  - `target/x86_64-unknown-linux-gnu/release/amaranctl` (< 10 MB)
 
 - [ ] **Step 1: Compile Windows `.exe` via Podman**
 Run container build targeting `x86_64-pc-windows-gnu`.
-Expected: `amaran-control.exe` built successfully.
+Expected: `amaranctl.exe` built successfully.
 
 - [ ] **Step 2: Test executable on Windows host**
-Run `amaran-control.exe --help` and verify prompt.
+Run `amaranctl.exe --help` and verify prompt.
 
 - [ ] **Step 3: Live Verification with Amaran 60x S**
-Run `amaran-control.exe on` and `amaran-control.exe cct 4500` to confirm physical light response.
+Run `amaranctl.exe on` and `amaranctl.exe cct 4500` to confirm physical light response.
 
 - [ ] **Step 4: Commit & Tag**
 ```bash
 git commit -m "chore: release v1.0.0 windows and linux binaries"
 ```
+
