@@ -5,3 +5,4 @@ pub mod cli;
 pub mod autostart;
 pub mod hotkeys;
 pub mod tray;
+pub mod sqlite_dyn;

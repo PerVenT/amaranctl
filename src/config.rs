@@ -112,46 +112,7 @@ impl AppConfig {
         let db_path = Self::find_amaran_db()
             .context("Could not find amaran.db in Amaran Desktop application directories")?;
 
-        let conn = rusqlite::Connection::open(&db_path)
-            .with_context(|| format!("Failed to open database at {:?}", db_path))?;
-
-        let (mesh_uuid, net_key, app_key): (String, String, String) = conn.query_row(
-            "SELECT uuid, net_key, app_key FROM mesh LIMIT 1;",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        ).context("Failed to query mesh credentials from database")?;
-
-        let mut stmt = conn.prepare("SELECT name, mac_address, node_address, device_key, device_uuid, code FROM fixtures;")
-            .context("Failed to prepare fixtures query")?;
-
-        let light_iter = stmt.query_map([], |row| {
-            Ok(LightConfig {
-                name: row.get(0)?,
-                mac: row.get(1)?,
-                address: row.get(2)?,
-                device_key: row.get(3)?,
-                device_uuid: row.get(4)?,
-                code: row.get(5)?,
-            })
-        }).context("Failed to execute fixtures query")?;
-
-        let mut lights = Vec::new();
-        for light in light_iter {
-            if let Ok(l) = light {
-                lights.push(l);
-            }
-        }
-
-        if lights.is_empty() {
-            anyhow::bail!("No lights found in amaran.db fixtures table");
-        }
-
-        let config = AppConfig {
-            mesh_uuid,
-            net_key,
-            app_key,
-            lights,
-        };
+        let config = crate::sqlite_dyn::extract_credentials_from_db(&db_path)?;
 
         // Automatically save to ~/.config/amaranctl/config.json for fast subsequent runs
         if let Some(home) = dirs::home_dir() {

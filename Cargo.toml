@@ -15,8 +15,8 @@ thiserror = "2.0"
 anyhow = "1.0"
 uuid = "1.0"
 dirs = "6.0"
-rusqlite = { version = "0.31", features = ["bundled"] }
 glob = "0.3"
+libc = "0.2"
 
 # Crypto
 aes = "0.8"
@@ -32,7 +32,12 @@ btleplug = "0.11"
 tray-icon = "0.19"
 muda = "0.15"
 global-hotkey = "0.6"
-windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_System_Registry", "Win32_System_Console"] }
+windows-sys = { version = "0.59", features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Registry",
+    "Win32_System_Console",
+    "Win32_System_LibraryLoader"
+] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 tray-icon = "0.19"
