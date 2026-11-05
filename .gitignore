@@ -1,5 +1,7 @@
 target/
 .superpowers/
+*.exe
+amaranctl
 __pycache__/
 *.pyc
 token.txt

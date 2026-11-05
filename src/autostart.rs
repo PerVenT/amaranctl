@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use std::env;
+#[cfg(not(windows))]
 use std::fs;
 use std::process::Command;
 

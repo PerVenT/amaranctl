@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use std::sync::mpsc;
+#[cfg(not(windows))]
 use std::time::Duration;
 use tray_icon::{Icon, TrayIconBuilder};
 
@@ -171,7 +172,7 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
         unsafe {
             let mut msg: MSG = std::mem::zeroed();
             loop {
-                while PeekMessageW(&mut msg, 0, 0, 0, PM_REMOVE) != 0 {
+                while PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
                     if msg.message == windows_sys::Win32::UI::WindowsAndMessaging::WM_QUIT {
                         let _ = tx.send(AppAction::Quit);
                         return Ok(());
