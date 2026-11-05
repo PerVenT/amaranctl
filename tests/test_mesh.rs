@@ -1,6 +1,7 @@
 use amaranctl::mesh::{
     encode_onoff, encode_brightness, encode_cct,
-    MeshSecurityContext, build_proxy_pdu,
+    MeshSecurityContext, build_proxy_pdu, decrypt_proxy_pdu,
+    decode_telink_status, opcode_bytes,
 };
 
 #[test]
@@ -63,4 +64,31 @@ fn test_mesh_security_context_and_proxy_pdu() {
     assert_eq!(pdu[0], 0x00);
     // Mesh Network PDU size check: 1 proxy header + 1 net header + 6 obf header + net payload + 4 mic
     assert!(pdu.len() >= 25);
+}
+
+#[test]
+fn test_mesh_encryption_decryption_roundtrip() {
+    let ctx = MeshSecurityContext::new(&[1u8; 16], &[2u8; 16]).unwrap();
+    let pdu = build_proxy_pdu(&ctx, 100, 0x0001, 0x0002, 0, 0x26, &[0xAA, 0xBB]).unwrap();
+    let (src, dst, decrypted) = decrypt_proxy_pdu(&ctx, 0, &pdu).unwrap();
+    assert_eq!(src, 0x0001);
+    assert_eq!(dst, 0x0002);
+    assert_eq!(&decrypted[..1], &opcode_bytes(0x26)[..]);
+    assert_eq!(&decrypted[1..], &[0xAA, 0xBB]);
+}
+
+#[test]
+fn test_decode_telink_status_cct_packet() {
+    // Valid 10-byte CCT status packet
+    let mut packet = [0u8; 10];
+    packet[9] = 0x02; // CCT command type
+    // power on (bit 8 -> byte 1, bit 0)
+    packet[1] = 0x01;
+    // checksum
+    let mut sum: u16 = 0;
+    for i in 1..10 { sum += packet[i] as u16; }
+    packet[0] = (sum & 0xff) as u8;
+
+    let decoded = decode_telink_status(&packet).expect("valid decode");
+    assert!(decoded.power);
 }

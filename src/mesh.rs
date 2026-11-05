@@ -128,6 +128,17 @@ pub fn aes_ccm_encrypt(
         .map_err(|e| anyhow::anyhow!("AES-CCM encryption error: {:?}", e))
 }
 
+pub fn aes_ccm_decrypt(key: &[u8; 16], nonce: &[u8; 13], ciphertext: &[u8]) -> Result<Vec<u8>> {
+    let cipher = AesCcm4::new(key.into());
+    let payload = Payload {
+        msg: ciphertext,
+        aad: &[],
+    };
+    cipher
+        .decrypt(nonce.into(), payload)
+        .map_err(|e| anyhow::anyhow!("AES-CCM decryption error: {:?}", e))
+}
+
 fn app_nonce(seq: u32, src: u16, dst: u16, iv_index: u32) -> [u8; 13] {
     [
         0x01,
@@ -366,4 +377,116 @@ pub fn encode_status_request() -> [u8; 10] {
     out[9] = 0x0e;
     out[0] = checksum(&out);
     out
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LampStatusData {
+    pub power: bool,
+    pub brightness: f32,
+    pub cct: u16,
+    pub gm: i8,
+}
+
+pub fn decrypt_proxy_pdu(
+    ctx: &MeshSecurityContext,
+    iv_index: u32,
+    pdu: &[u8],
+) -> Result<(u16, u16, Vec<u8>)> {
+    if pdu.is_empty() {
+        bail!("Empty proxy PDU");
+    }
+    if (pdu[0] & 0x3f) != PROXY_TYPE_NETWORK {
+        bail!("Not a network proxy PDU (type: 0x{:02x})", pdu[0]);
+    }
+    let net_pdu = &pdu[1..];
+    if net_pdu.len() < 19 {
+        bail!("Network PDU too short: {} bytes", net_pdu.len());
+    }
+
+    let nid = net_pdu[0] & 0x7f;
+    if nid != ctx.nid {
+        bail!("NID mismatch: expected {}, got {}", ctx.nid, nid);
+    }
+
+    let obfuscated = &net_pdu[1..7];
+    let encrypted_net_payload = &net_pdu[7..];
+
+    let pecb = compute_pecb(&ctx.priv_key, iv_index, &encrypted_net_payload[..7]);
+    let mut hdr = [0u8; 6];
+    for i in 0..6 {
+        hdr[i] = obfuscated[i] ^ pecb[i];
+    }
+
+    let ctl = (hdr[0] >> 7) & 1;
+    let ttl = hdr[0] & 0x7f;
+    let seq = ((hdr[1] as u32) << 16) | ((hdr[2] as u32) << 8) | (hdr[3] as u32);
+    let src = ((hdr[4] as u16) << 8) | (hdr[5] as u16);
+
+    let nonce_net = net_nonce(ctl, ttl, seq, src, iv_index);
+    let net_payload = aes_ccm_decrypt(&ctx.enc_key, &nonce_net, encrypted_net_payload)
+        .context("decrypt network payload")?;
+
+    if net_payload.len() < 3 {
+        bail!("Decrypted network payload too short: {} bytes", net_payload.len());
+    }
+
+    let dst = ((net_payload[0] as u16) << 8) | (net_payload[1] as u16);
+    let lower_transport = &net_payload[2..];
+    let upper_encrypted = &lower_transport[1..];
+
+    let nonce_app = app_nonce(seq, src, dst, iv_index);
+    let access_payload = aes_ccm_decrypt(&ctx.app_key, &nonce_app, upper_encrypted)
+        .context("decrypt access payload")?;
+
+    Ok((src, dst, access_payload))
+}
+
+pub fn decode_telink_status(payload: &[u8]) -> Option<LampStatusData> {
+    let p = if payload.len() == 10 {
+        payload
+    } else if payload.len() > 10 {
+        &payload[payload.len() - 10..]
+    } else {
+        return None;
+    };
+
+    let sum: u16 = p[1..10].iter().map(|&b| b as u16).sum();
+    if p[0] != (sum & 0xff) as u8 {
+        return None;
+    }
+
+    let cmd = p[9] & 0x7f;
+    let mut low64: u64 = 0;
+    for i in 0..8 {
+        low64 |= (p[i] as u64) << (i * 8);
+    }
+    let high16: u16 = (p[8] as u16) | ((p[9] as u16) << 8);
+
+    let power = ((low64 >> 8) & 0x01) == 1;
+
+    let (cct, brightness, gm) = if cmd == 0x02 {
+        let cct_raw = ((low64 >> 52) & 0x3ff) as u16;
+        let cct_flag = ((low64 >> 42) & 0x01) == 1;
+        let telink_cct = if cct_flag { cct_raw + 1000 } else { cct_raw };
+        let cct_kelvin = (telink_cct * 10).clamp(2700, 6500);
+
+        let intensity_raw = (((high16 as u32) << 2) | (((low64 >> 62) & 0x03) as u32)) & 0x3ff;
+        let brightness_pct = (intensity_raw as f32) / 10.0;
+
+        let gm_raw = ((low64 >> 45) & 0x7f) as i8;
+        let gm = (gm_raw - 10).clamp(-10, 10);
+
+        (cct_kelvin, brightness_pct, gm)
+    } else {
+        let intensity_raw = (((high16 as u32) << 2) | (((low64 >> 62) & 0x03) as u32)) & 0x3ff;
+        let brightness_pct = (intensity_raw as f32) / 10.0;
+        (5600, brightness_pct, 0)
+    };
+
+    Some(LampStatusData {
+        power,
+        brightness,
+        cct,
+        gm,
+    })
 }
