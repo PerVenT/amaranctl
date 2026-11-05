@@ -1,3 +1,5 @@
+#![windows_subsystem = "windows"]
+
 use anyhow::Result;
 use clap::Parser;
 use std::env;
@@ -7,6 +9,19 @@ use amaranctl::ble::BleMeshClient;
 use amaranctl::cli::{Cli, Commands};
 use amaranctl::config::AppConfig;
 use amaranctl::tray::run_tray_app;
+
+fn attach_parent_console_if_cli() {
+    #[cfg(windows)]
+    {
+        if std::env::args().len() > 1 {
+            unsafe {
+                windows_sys::Win32::System::Console::AttachConsole(
+                    windows_sys::Win32::System::Console::ATTACH_PARENT_PROCESS,
+                );
+            }
+        }
+    }
+}
 
 fn find_config_path(custom: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(p) = custom {
@@ -44,6 +59,8 @@ fn find_config_path(custom: Option<PathBuf>) -> Result<PathBuf> {
 }
 
 fn main() -> Result<()> {
+    attach_parent_console_if_cli();
+
     let args = Cli::parse();
     let config_path = find_config_path(args.config)?;
     let config = AppConfig::load_from_path(&config_path)?;
@@ -54,11 +71,11 @@ fn main() -> Result<()> {
                 .enable_all()
                 .build()?;
             rt.block_on(async {
-                println!("Turning Amaran ON...");
+                println!("Connecting to Amaran...");
                 let mut client = BleMeshClient::new(config)?;
-                client.connect().await?;
                 client.set_power(true).await?;
-                println!("Done.");
+                println!("Amaran 60x S turned ON.");
+                let _ = client.disconnect().await;
                 Ok::<(), anyhow::Error>(())
             })?;
         }
@@ -67,11 +84,11 @@ fn main() -> Result<()> {
                 .enable_all()
                 .build()?;
             rt.block_on(async {
-                println!("Turning Amaran OFF...");
+                println!("Connecting to Amaran...");
                 let mut client = BleMeshClient::new(config)?;
-                client.connect().await?;
                 client.set_power(false).await?;
-                println!("Done.");
+                println!("Amaran 60x S turned OFF.");
+                let _ = client.disconnect().await;
                 Ok::<(), anyhow::Error>(())
             })?;
         }
@@ -80,12 +97,12 @@ fn main() -> Result<()> {
                 .enable_all()
                 .build()?;
             rt.block_on(async {
-                println!("Toggling Amaran power...");
+                println!("Connecting to Amaran...");
                 let mut client = BleMeshClient::new(config)?;
-                client.connect().await?;
                 let new_state = !client.last_power;
                 client.set_power(new_state).await?;
-                println!("Done.");
+                println!("Power toggled to: {}.", if new_state { "ON" } else { "OFF" });
+                let _ = client.disconnect().await;
                 Ok::<(), anyhow::Error>(())
             })?;
         }
@@ -94,18 +111,18 @@ fn main() -> Result<()> {
                 .enable_all()
                 .build()?;
             rt.block_on(async {
+                println!("Connecting to Amaran...");
                 let mut client = BleMeshClient::new(config)?;
-                client.connect().await?;
                 if value > 100.0 {
                     let raw = value.clamp(0.0, 1000.0) as u16;
-                    println!("Setting raw brightness to {} / 1000...", raw);
                     client.set_brightness_raw(raw).await?;
+                    println!("Raw brightness set to {} / 1000.", raw);
                 } else {
                     let pct = value.clamp(0.0, 100.0);
-                    println!("Setting brightness to {:.1}%...", pct);
                     client.set_brightness(pct).await?;
+                    println!("Brightness set to {:.1}%.", pct);
                 }
-                println!("Done.");
+                let _ = client.disconnect().await;
                 Ok::<(), anyhow::Error>(())
             })?;
         }
@@ -114,17 +131,16 @@ fn main() -> Result<()> {
                 .enable_all()
                 .build()?;
             rt.block_on(async {
-                let k = kelvin.clamp(2700, 6500);
-                println!("Setting CCT to {}K...", k);
+                println!("Connecting to Amaran...");
                 let mut client = BleMeshClient::new(config)?;
-                client.connect().await?;
+                let k = kelvin.clamp(2700, 6500);
                 client.set_cct(k).await?;
-                println!("Done.");
+                println!("CCT set to {}K.", k);
+                let _ = client.disconnect().await;
                 Ok::<(), anyhow::Error>(())
             })?;
         }
         Some(Commands::Run) | None => {
-            println!("Starting amaranctl background tray application...");
             run_tray_app(config)?;
         }
     }

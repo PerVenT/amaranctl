@@ -140,6 +140,21 @@ impl BleMeshClient {
         )
     }
 
+    pub async fn is_connected(&self) -> bool {
+        if let Some(ref p) = self.peripheral {
+            p.is_connected().await.unwrap_or(false) && self.char_in.is_some()
+        } else {
+            false
+        }
+    }
+
+    pub async fn ensure_connected(&mut self) -> Result<()> {
+        if self.is_connected().await {
+            return Ok(());
+        }
+        self.connect().await
+    }
+
     pub async fn connect(&mut self) -> Result<()> {
         let manager = Manager::new().await.context("failed to get BLE manager")?;
         let adapters = manager.adapters().await.context("failed to list BLE adapters")?;
@@ -157,11 +172,16 @@ impl BleMeshClient {
         while scan_start.elapsed() < Duration::from_secs(10) {
             let peripherals = adapter.peripherals().await.unwrap_or_default();
             for p in peripherals {
-                let props = p.properties().await.unwrap_or_default();
-                if let Some(props) = props {
+                let p_addr = p.address().to_string().replace(':', "").to_uppercase();
+                if p_addr == target_mac {
+                    matched_peripheral = Some(p);
+                    break;
+                }
+
+                if let Ok(Some(props)) = p.properties().await {
                     let addr = props.address.to_string().replace(':', "").to_uppercase();
                     let name = props.local_name.unwrap_or_default();
-                    if addr == target_mac || name == *target_name || name.contains(&target_mac) {
+                    if addr == target_mac || name == *target_name || name.contains(&target_mac) || name == "Mesh Device" {
                         matched_peripheral = Some(p);
                         break;
                     }
@@ -173,15 +193,19 @@ impl BleMeshClient {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
 
-        let _ = adapter.stop_scan().await;
-
         let peripheral = match matched_peripheral {
             Some(p) => p,
-            None => bail!("Could not find target Amaran light '{}' ({})", target_name, target_mac),
+            None => {
+                let _ = adapter.stop_scan().await;
+                bail!("Could not find target Amaran light '{}' ({})", target_name, target_mac);
+            }
         };
 
+        // Note: Connect and discover services BEFORE stopping scan on Windows
+        // to prevent WinRT from dropping the peripheral watcher reference
         peripheral.connect().await.context("failed to connect to peripheral")?;
         peripheral.discover_services().await.context("failed to discover services")?;
+        let _ = adapter.stop_scan().await;
 
         let chars = peripheral.characteristics();
         let char_in = chars
@@ -223,7 +247,17 @@ impl BleMeshClient {
         Ok(())
     }
 
-    pub async fn send_raw_pdu(&self, pdu: &[u8]) -> Result<()> {
+    pub async fn disconnect(&mut self) -> Result<()> {
+        if let Some(ref p) = self.peripheral {
+            let _ = p.disconnect().await;
+        }
+        self.peripheral = None;
+        self.char_in = None;
+        Ok(())
+    }
+
+    pub async fn send_raw_pdu(&mut self, pdu: &[u8]) -> Result<()> {
+        self.ensure_connected().await?;
         let peripheral = self.peripheral.as_ref().context("not connected to light")?;
         let char_in = self.char_in.as_ref().context("characteristic not initialized")?;
 

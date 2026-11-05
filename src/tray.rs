@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
-use std::sync::mpsc;
+use tokio::sync::mpsc;
 #[cfg(not(windows))]
 use std::time::Duration;
 use tray_icon::{Icon, TrayIconBuilder};
@@ -106,7 +106,7 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
     let hotkeys = HotkeyBindings::new().ok();
 
     // Spawn async background worker thread for BLE
-    let (tx, rx) = mpsc::channel::<AppAction>();
+    let (tx, mut rx) = mpsc::unbounded_channel::<AppAction>();
 
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -123,10 +123,10 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
                 }
             };
 
-            // Attempt connection
-            let _ = client.connect().await;
+            // Attempt initial connection in background
+            let _ = client.ensure_connected().await;
 
-            while let Ok(action) = rx.recv() {
+            while let Some(action) = rx.recv().await {
                 match action {
                     AppAction::TogglePower => {
                         let new_state = !client.last_power;
