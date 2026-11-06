@@ -2,7 +2,7 @@
 .SYNOPSIS
     Converts and stitches demo recordings into an optimized split-screen GIF and MP4 for README.md.
 .DESCRIPTION
-    Uses FFmpeg to crop the terminal and tray regions, stitch them side-by-side (hstack),
+    Uses FFmpeg (native or via WSL) to crop the terminal and tray regions, stitch them side-by-side (hstack),
     and generate a high-quality palette-optimized demo.gif (<2MB) and demo.mp4.
     If no input video is provided, generates an animated split-screen demo showcasing
     the CLI and adaptive tray icon transitions.
@@ -14,6 +14,8 @@
     Frames per second for output GIF (default: 15).
 .PARAMETER TotalWidth
     Target width in pixels for composite output (default: 960).
+.PARAMETER Direct
+    Directly encode the input video without split cropping.
 .PARAMETER Sample
     Force generation of synthetic demonstration asset.
 #>
@@ -24,6 +26,7 @@ param(
     [string]$OutputDir,
     [int]$Fps = 15,
     [int]$TotalWidth = 960,
+    [switch]$Direct,
     [switch]$Sample
 )
 
@@ -34,13 +37,21 @@ if (-not $OutputDir) {
     $OutputDir = Join-Path $scriptParent "docs\assets"
 }
 
-# Ensure output directory exists
 if (-not (Test-Path $OutputDir)) {
     New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 }
 
+$OutputDir = [System.IO.Path]::GetFullPath($OutputDir)
 $OutputGif = Join-Path $OutputDir "demo.gif"
 $OutputMp4 = Join-Path $OutputDir "demo.mp4"
+
+if ($InputVideo) {
+    if (Test-Path $InputVideo) {
+        $InputVideo = (Resolve-Path $InputVideo).Path
+    } else {
+        Write-Error "Input video file '$InputVideo' not found."
+    }
+}
 
 # 1. Locate FFmpeg (Host Windows or WSL)
 $UseWsl = $false
@@ -73,12 +84,15 @@ if (-not $UseWsl -and -not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
 function Convert-ToWslPath {
     param([string]$Path)
     if (-not $Path) { return $Path }
+    if (-not [System.IO.Path]::IsPathRooted($Path)) {
+        try { $Path = (Resolve-Path $Path -ErrorAction SilentlyContinue).Path } catch {}
+    }
     if ($Path -match '^([A-Za-z]):\\(.*)$') {
         $drive = $Matches[1].ToLower()
         $sub = $Matches[2] -replace '\\', '/'
         return "/mnt/$drive/$sub"
     }
-    return $Path
+    return ($Path -replace '\\', '/')
 }
 
 function Invoke-FFmpeg {
@@ -87,17 +101,19 @@ function Invoke-FFmpeg {
     $ErrorActionPreference = "SilentlyContinue"
     try {
         if ($UseWsl) {
-            # Translate Windows paths to WSL paths in argument vector
+            # Translate Windows paths and safely wrap each argument for bash
             $wslArgs = @()
             foreach ($arg in $ArgumentList) {
-                if ($arg -match '^[A-Za-z]:\\') {
-                    $wslArgs += (Convert-ToWslPath $arg)
+                if ($arg -match '^[A-Za-z]:\\' -or (Test-Path $arg -ErrorAction SilentlyContinue)) {
+                    $wslPath = Convert-ToWslPath $arg
+                    $wslArgs += "'" + ($wslPath -replace "'", "'\''") + "'"
                 } else {
-                    $wslArgs += $arg
+                    $wslArgs += "'" + ($arg -replace "'", "'\''") + "'"
                 }
             }
-            # Invoke wsl safely with argument vector (no bash -c string interpolation)
-            wsl -d $WslDistroName -- ffmpeg -hide_banner -loglevel warning -y @wslArgs 2>$null
+            # Execute bash safely with single-quoted arguments (prevents shell semicolon splitting)
+            $bashCmd = "ffmpeg -hide_banner -loglevel warning -y " + ($wslArgs -join " ")
+            wsl -d $WslDistroName bash -c $bashCmd
         } else {
             # Invoke native Windows ffmpeg safely with argument vector
             & ffmpeg -hide_banner -loglevel warning -y @ArgumentList
@@ -119,23 +135,38 @@ Write-Host ""
 if ($InputVideo -and (Test-Path $InputVideo) -and -not $Sample) {
     Write-Host "[1/2] Processing raw recording from: $InputVideo..." -ForegroundColor Yellow
 
-    # Calculate even dimensions: split screen 50/50
-    $halfWidth = [int]($TotalWidth / 2)
-    if ($halfWidth % 2 -ne 0) { $halfWidth++ }
-    $halfHeight = [int]($halfWidth * 9 / 16)
-    if ($halfHeight % 2 -ne 0) { $halfHeight++ }
+    if ($Direct) {
+        Write-Host "    Mode: Direct scaling ($TotalWidth px width)..." -ForegroundColor DarkGray
+        $filterComplex = "scale=${TotalWidth}:-2:flags=lanczos"
 
-    $filterComplex = "[0:v]crop=iw/2:ih:0:0,scale=${halfWidth}:${halfHeight}[term];" +
-                     "[0:v]crop=iw/4:ih/4:3*iw/4:3*ih/4,scale=${halfWidth}:${halfHeight}:flags=lanczos[tray];" +
-                     "[term][tray]hstack[v]"
+        Write-Host "    Encoding MP4 video..." -ForegroundColor DarkGray
+        Invoke-FFmpeg @("-i", $InputVideo, "-vf", $filterComplex, "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "22", $OutputMp4)
 
-    Write-Host "    Encoding MP4 video..." -ForegroundColor DarkGray
-    Invoke-FFmpeg @("-i", $InputVideo, "-filter_complex", $filterComplex, "-map", "[v]", "-r", "$Fps", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "22", $OutputMp4)
+        Write-Host "    Generating palette-optimized GIF..." -ForegroundColor DarkGray
+        $paletteFilter = "$filterComplex,split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5"
+        Invoke-FFmpeg @("-i", $InputVideo, "-vf", $paletteFilter, "-r", "$Fps", $OutputGif)
+    } else {
+        Write-Host "    Mode: Split-screen stitch (Terminal on Left, Zoomed Tray on Right)..." -ForegroundColor DarkGray
 
-    Write-Host "    Generating palette-optimized GIF..." -ForegroundColor DarkGray
-    $paletteFilter = "$filterComplex;[v]split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5"
-    Invoke-FFmpeg @("-i", $InputVideo, "-filter_complex", $paletteFilter, "-r", "$Fps", $OutputGif)
+        # Calculate even dimensions: split screen 50/50
+        $halfWidth = [int]($TotalWidth / 2)
+        if ($halfWidth % 2 -ne 0) { $halfWidth++ }
+        $height = 360
 
+        # Crop terminal (y=80..630) and taskbar notification area (x=560..840, y=0..56)
+        $filterComplex = "[0:v]crop=840:550:0:80,scale=${halfWidth}:${height}[term];" +
+                         "[0:v]crop=280:56:560:0,scale=${halfWidth}:96:flags=lanczos,pad=${halfWidth}:${height}:0:132:0x181825," +
+                         "drawtext=text='Windows System Tray':fontcolor=0xa6adc8:fontsize=17:x=(w-text_w)/2:y=65," +
+                         "drawtext=text='Live Adaptive Tray Icon':fontcolor=0x89b4fa:fontsize=13:x=(w-text_w)/2:y=255[tray];" +
+                         "[term][tray]hstack[v]"
+
+        Write-Host "    Encoding MP4 video..." -ForegroundColor DarkGray
+        Invoke-FFmpeg @("-i", $InputVideo, "-filter_complex", $filterComplex, "-map", "[v]", "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "22", $OutputMp4)
+
+        Write-Host "    Generating palette-optimized GIF (<2MB)..." -ForegroundColor DarkGray
+        $paletteFilter = "$filterComplex;[v]split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5"
+        Invoke-FFmpeg @("-i", $InputVideo, "-filter_complex", $paletteFilter, "-r", "$Fps", $OutputGif)
+    }
 } else {
     Write-Host "[1/2] Generating synchronized animated split-screen demo..." -ForegroundColor Yellow
 
@@ -187,6 +218,3 @@ $mp4Item = Get-Item $OutputMp4
 Write-Host ("GIF:  {0} ({1:N1} KB)" -f $OutputGif, ($gifItem.Length / 1KB)) -ForegroundColor Green
 Write-Host ("MP4:  {0} ({1:N1} KB)" -f $OutputMp4, ($mp4Item.Length / 1KB)) -ForegroundColor Green
 Write-Host ""
-
-
-
