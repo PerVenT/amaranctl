@@ -170,35 +170,37 @@ if ($InputVideo -and (Test-Path $InputVideo) -and -not $Sample) {
 } else {
     Write-Host "[1/2] Generating synchronized animated split-screen demo..." -ForegroundColor Yellow
 
-    $duration = 10
+    $duration = 12
     $halfWidth = [int]($TotalWidth / 2)
     if ($halfWidth % 2 -ne 0) { $halfWidth++ }
     $height = 360
 
     # Build an FFmpeg filtergraph:
     # Left: Terminal with simulated typing and IPC responses
-    # Right: Taskbar Tray with live adaptive CCT color transitions (Gray -> Warm 3200K -> Daylight 5600K -> Off)
+    # Right: Taskbar Tray with live adaptive CCT color transitions (Gray -> 2700K Amber -> 6500K Ice Blue -> Toggle)
     $fg = "color=c=0x1e1e2e:s=${halfWidth}x${height}:d=${duration}[term_bg];" +
           "color=c=0x181825:s=${halfWidth}x${height}:d=${duration}[tray_bg];" +
           "[term_bg]drawtext=text='amaranctl terminal (IPC)':fontsize=16:fontcolor=0x89b4fa:x=20:y=20," +
-          "drawtext=text='$ amaranctl status':fontsize=15:fontcolor=0xf9e2af:x=20:y=60:enable='gte(t,0.5)'," +
-          "drawtext=text='Amaran 60x S\: OFF (Ready)':fontsize=14:fontcolor=0xa6adc8:x=20:y=85:enable='gte(t,1.0)'," +
-          "drawtext=text='$ amaranctl on':fontsize=15:fontcolor=0xf9e2af:x=20:y=125:enable='gte(t,2.0)'," +
-          "drawtext=text='Turned ON  [IPC <50ms]':fontsize=14:fontcolor=0xa6e3a1:x=20:y=150:enable='gte(t,2.4)'," +
-          "drawtext=text='$ amaranctl cct 5600':fontsize=15:fontcolor=0xf9e2af:x=20:y=190:enable='gte(t,4.5)'," +
-          "drawtext=text='CCT set to 5600K Daylight':fontsize=14:fontcolor=0x89dceb:x=20:y=215:enable='gte(t,4.9)'," +
-          "drawtext=text='[Hotkey] Ctrl+Alt+Down (-10 pct)':fontsize=14:fontcolor=0xcba6f7:x=20:y=255:enable='gte(t,7.0)'," +
-          "drawtext=text='$ amaranctl off':fontsize=15:fontcolor=0xf9e2af:x=20:y=295:enable='gte(t,8.5)'[term];" +
+          "drawtext=text='$ amaranctl status':fontsize=15:fontcolor=0xf9e2af:x=20:y=55:enable='gte(t,0.5)'," +
+          "drawtext=text='Amaran 60x S\: OFF (Ready)':fontsize=14:fontcolor=0xa6adc8:x=20:y=80:enable='gte(t,1.0)'," +
+          "drawtext=text='$ amaranctl on':fontsize=15:fontcolor=0xf9e2af:x=20:y=115:enable='gte(t,1.8)'," +
+          "drawtext=text='Turned ON  [IPC <50ms]':fontsize=14:fontcolor=0xa6e3a1:x=20:y=140:enable='gte(t,2.2)'," +
+          "drawtext=text='$ amaranctl cct 2700':fontsize=15:fontcolor=0xf9e2af:x=20:y=175:enable='gte(t,3.2)'," +
+          "drawtext=text='CCT set to 2700K Sunset Gold':fontsize=14:fontcolor=0xffaa33:x=20:y=200:enable='gte(t,3.6)'," +
+          "drawtext=text='$ amaranctl cct 6500':fontsize=15:fontcolor=0xf9e2af:x=20:y=235:enable='gte(t,5.0)'," +
+          "drawtext=text='CCT set to 6500K Ice Blue':fontsize=14:fontcolor=0xcce6ff:x=20:y=260:enable='gte(t,5.4)'," +
+          "drawtext=text='[HOTKEY] Ctrl+Alt+Left (Warmer)':fontsize=14:fontcolor=0xcba6f7:x=20:y=295:enable='gte(t,7.0)'," +
+          "drawtext=text='[HOTKEY] Ctrl+Alt+L (Toggle Power)':fontsize=14:fontcolor=0xf5c2e7:x=20:y=325:enable='gte(t,9.0)'[term];" +
           "[tray_bg]drawtext=text='Windows System Tray':fontsize=16:fontcolor=0xa6adc8:x=20:y=20," +
           "drawbox=x=${halfWidth}/2-45:y=${height}/2-45:w=90:h=90:color=0x313244:t=fill," +
-          "drawbox=x=${halfWidth}/2-25:y=${height}/2-25:w=50:h=50:color=0x585b70:t=fill:enable='lt(t,2.0)+gte(t,8.8)'," +
-          "drawtext=text='[o] OFF':fontsize=16:fontcolor=0xa6adc8:x=${halfWidth}/2-35:y=${height}/2+60:enable='lt(t,2.0)+gte(t,8.8)'," +
-          "drawbox=x=${halfWidth}/2-25:y=${height}/2-25:w=50:h=50:color=0xffaa33:t=fill:enable='between(t,2.0,4.8)'," +
-          "drawtext=text='(*) ON | 3200K Warm':fontsize=16:fontcolor=0xffaa33:x=${halfWidth}/2-75:y=${height}/2+60:enable='between(t,2.0,4.8)'," +
-          "drawbox=x=${halfWidth}/2-25:y=${height}/2-25:w=50:h=50:color=0xcce6ff:t=fill:enable='between(t,4.8,8.8)'," +
-          "drawtext=text='(*) ON | 5600K Daylight':fontsize=16:fontcolor=0xcce6ff:x=${halfWidth}/2-85:y=${height}/2+60:enable='between(t,4.8,8.8)'," +
-          "drawbox=x=${halfWidth}/2-120:y=300:w=240:h=36:color=0x45475a:t=fill:enable='between(t,7.0,8.4)'," +
-          "drawtext=text='[KEY] Ctrl+Alt+Down':fontsize=14:fontcolor=0xf5c2e7:x=${halfWidth}/2-75:y=310:enable='between(t,7.0,8.4)'[tray];" +
+          "drawbox=x=${halfWidth}/2-25:y=${height}/2-25:w=50:h=50:color=0x585b70:t=fill:enable='lt(t,1.8)+between(t,9.0,10.5)+gte(t,11.5)'," +
+          "drawtext=text='[o] OFF':fontsize=16:fontcolor=0xa6adc8:x=${halfWidth}/2-35:y=${height}/2+60:enable='lt(t,1.8)+between(t,9.0,10.5)+gte(t,11.5)'," +
+          "drawbox=x=${halfWidth}/2-25:y=${height}/2-25:w=50:h=50:color=0xffaa33:t=fill:enable='between(t,1.8,5.2)+between(t,7.0,9.0)+between(t,10.5,11.5)'," +
+          "drawtext=text='(*) ON | 2700K Gold':fontsize=16:fontcolor=0xffaa33:x=${halfWidth}/2-75:y=${height}/2+60:enable='between(t,1.8,5.2)+between(t,7.0,9.0)+between(t,10.5,11.5)'," +
+          "drawbox=x=${halfWidth}/2-25:y=${height}/2-25:w=50:h=50:color=0xcce6ff:t=fill:enable='between(t,5.2,7.0)'," +
+          "drawtext=text='(*) ON | 6500K Ice Blue':fontsize=16:fontcolor=0xcce6ff:x=${halfWidth}/2-85:y=${height}/2+60:enable='between(t,5.2,7.0)'," +
+          "drawbox=x=${halfWidth}/2-120:y=300:w=240:h=36:color=0x45475a:t=fill:enable='between(t,7.0,8.8)+between(t,9.0,11.2)'," +
+          "drawtext=text='[KEY] Global Hotkey Active':fontsize=14:fontcolor=0xf5c2e7:x=${halfWidth}/2-90:y=310:enable='between(t,7.0,8.8)+between(t,9.0,11.2)'[tray];" +
           "[term][tray]hstack[v]"
 
     Write-Host "    Generating MP4 demo..." -ForegroundColor DarkGray
