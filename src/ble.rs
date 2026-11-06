@@ -193,6 +193,10 @@ impl BleMeshClient {
         }
     }
 
+    pub fn has_peripheral(&self) -> bool {
+        self.peripheral.is_some()
+    }
+
     pub async fn ensure_connected(&mut self) -> Result<()> {
         if self.is_connected().await {
             return Ok(());
@@ -292,6 +296,10 @@ impl BleMeshClient {
                             }
                         }
                     }
+                    // Stream closed (disconnection or power off at wall)
+                    let mut s = status_clone.write().await;
+                    s.connected = false;
+                    s.connecting = false;
                 });
             }
         }

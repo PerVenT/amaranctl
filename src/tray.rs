@@ -220,9 +220,17 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
                                 let _ = tx.send(AppAction::SetBrightness(val));
                                 IpcResponse { ok: true, message: Some(format!("Brightness set to {:.1}%", val)) }
                             }
+                            IpcCommand::AdjustBrightness(delta) => {
+                                let _ = tx.send(AppAction::AdjustBrightness(delta));
+                                IpcResponse { ok: true, message: Some(format!("Brightness adjusted by {:+.1}%", delta)) }
+                            }
                             IpcCommand::Cct(val) => {
                                 let _ = tx.send(AppAction::SetCct(val));
                                 IpcResponse { ok: true, message: Some(format!("CCT set to {}K", val)) }
+                            }
+                            IpcCommand::AdjustCct(delta) => {
+                                let _ = tx.send(AppAction::AdjustCct(delta));
+                                IpcResponse { ok: true, message: Some(format!("CCT adjusted by {:+0}K", delta)) }
                             }
                             IpcCommand::Status => {
                                 let s = status_ref.read().await.clone();
@@ -246,7 +254,11 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
                 tokio::select! {
                     _ = poll_interval.tick() => {
                         if client.is_connected().await {
-                            let _ = client.poll_status().await;
+                            if let Err(_) = client.poll_status().await {
+                                let _ = client.disconnect().await;
+                            }
+                        } else if client.has_peripheral() {
+                            let _ = client.disconnect().await;
                         }
                     }
                     Some(action) = rx.recv() => {
@@ -316,10 +328,7 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
                 while let Ok(event) = menu_receiver.try_recv() {
                     match event.id.0.as_str() {
                         "toggle" => {
-                            let is_connecting = shared_status.try_read().map(|s| s.connecting).unwrap_or(false);
-                            if !is_connecting {
-                                let _ = tx.send(AppAction::TogglePower);
-                            }
+                            let _ = tx.send(AppAction::TogglePower);
                         }
                         "b_10" => { let _ = tx.send(AppAction::SetBrightness(10.0)); }
                         "b_25" => { let _ = tx.send(AppAction::SetBrightness(25.0)); }
@@ -399,10 +408,7 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
             while let Ok(event) = menu_receiver.try_recv() {
                 match event.id.0.as_str() {
                     "toggle" => {
-                        let is_connecting = shared_status.try_read().map(|s| s.connecting).unwrap_or(false);
-                        if !is_connecting {
-                            let _ = tx.send(AppAction::TogglePower);
-                        }
+                        let _ = tx.send(AppAction::TogglePower);
                     }
                     "b_10" => { let _ = tx.send(AppAction::SetBrightness(10.0)); }
                     "b_25" => { let _ = tx.send(AppAction::SetBrightness(25.0)); }

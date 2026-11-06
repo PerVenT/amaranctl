@@ -4,7 +4,7 @@ use std::env;
 use std::path::PathBuf;
 
 use amaranctl::ble::BleMeshClient;
-use amaranctl::cli::{parse_brightness_val, parse_cct_val, Cli, Commands};
+use amaranctl::cli::{Cli, Commands};
 use amaranctl::config::AppConfig;
 use amaranctl::daemon::is_daemon_running;
 #[cfg(windows)]
@@ -113,7 +113,15 @@ fn main() -> Result<()> {
         let config = load_or_auto_import_config(args.config)?;
         rt.block_on(async {
             let mut client = BleMeshClient::new(config)?;
-            client.ensure_connected().await?;
+            if let Err(_) = client.ensure_connected().await {
+                if *json {
+                    let s = amaranctl::ble::LampStatus::default();
+                    println!("{}", serde_json::to_string(&s).unwrap());
+                } else {
+                    println!("Amaran 60x S: Disconnected (no link)");
+                }
+                return Ok::<(), anyhow::Error>(());
+            }
             let _ = client.poll_status().await;
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
             let s = client.current_status().await;
@@ -139,40 +147,24 @@ fn main() -> Result<()> {
         Some(Commands::Off) => Some(IpcCommand::Off),
         Some(Commands::Toggle) => Some(IpcCommand::Toggle),
         Some(Commands::Brightness { value }) => {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?;
-            let current_b = if let Ok(res) = rt.block_on(send_ipc_command(&IpcCommand::Status)) {
-                if let Some(ref j) = res.message {
-                    serde_json::from_str::<amaranctl::ble::LampStatus>(j)
-                        .map(|s| s.brightness)
-                        .unwrap_or(50.0)
-                } else {
-                    50.0
-                }
+            let s = value.trim();
+            if s.starts_with('+') || s.starts_with('-') {
+                let delta: f32 = s.parse()?;
+                Some(IpcCommand::AdjustBrightness(delta))
             } else {
-                50.0
-            };
-            let target_b = parse_brightness_val(value, current_b)?;
-            Some(IpcCommand::Brightness(target_b))
+                let val: f32 = s.parse()?;
+                Some(IpcCommand::Brightness(val))
+            }
         }
         Some(Commands::Cct { value }) => {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?;
-            let current_k = if let Ok(res) = rt.block_on(send_ipc_command(&IpcCommand::Status)) {
-                if let Some(ref j) = res.message {
-                    serde_json::from_str::<amaranctl::ble::LampStatus>(j)
-                        .map(|s| s.cct)
-                        .unwrap_or(5600)
-                } else {
-                    5600
-                }
+            let s = value.trim();
+            if s.starts_with('+') || s.starts_with('-') {
+                let delta: i32 = s.parse()?;
+                Some(IpcCommand::AdjustCct(delta))
             } else {
-                5600
-            };
-            let target_k = parse_cct_val(value, current_k)?;
-            Some(IpcCommand::Cct(target_k))
+                let val: u16 = s.parse()?;
+                Some(IpcCommand::Cct(val))
+            }
         }
         _ => None,
     };
@@ -223,10 +215,22 @@ fn main() -> Result<()> {
                         println!("Brightness set to {:.1}%.", pct);
                     }
                 }
+                IpcCommand::AdjustBrightness(delta) => {
+                    let cur = (client.last_brightness as f32) / 10.0;
+                    let target = (cur + delta).clamp(0.0, 100.0);
+                    client.set_brightness(target).await?;
+                    println!("Brightness set to {:.1}%.", target);
+                }
                 IpcCommand::Cct(kelvin) => {
                     let k = kelvin.clamp(2700, 6500);
                     client.set_cct(k).await?;
                     println!("CCT set to {}K.", k);
+                }
+                IpcCommand::AdjustCct(delta) => {
+                    let cur = client.last_cct as i32;
+                    let target = (cur + delta).clamp(2700, 6500) as u16;
+                    client.set_cct(target).await?;
+                    println!("CCT set to {}K.", target);
                 }
                 _ => {}
             }

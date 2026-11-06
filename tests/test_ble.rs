@@ -47,3 +47,30 @@ fn test_lamp_status_defaults_and_formatting() {
     s.connected = false;
     assert_eq!(s.tooltip_text(), "Amaran 60x S — 🔴 Немає зв'язку (перевірте живлення лампи)");
 }
+
+#[tokio::test]
+async fn test_disconnect_resets_status() {
+    let json = r#"{
+      "meshUuid": "c4e7e379d8ad11f1b2433ec5dd894707",
+      "netKey": "58015449C4CEDAA2B9E1FA1BB580973F",
+      "appKey": "FA1BB580973F58015449C4CEDAA2B9E1",
+      "lights": [
+        {
+          "name": "amaran 60x S-FD81D5",
+          "mac": "70:3E:97:FD:81:D5",
+          "address": 2
+        }
+      ]
+    }"#;
+    let config = AppConfig::from_json_str(json).unwrap();
+    let mut client = BleMeshClient::new(config).expect("client creation");
+    {
+        let mut s = client.status.write().await;
+        s.connected = true;
+        s.connecting = true;
+    }
+    client.disconnect().await.expect("disconnect");
+    let st = client.current_status().await;
+    assert!(!st.connected);
+    assert!(!st.connecting);
+}
