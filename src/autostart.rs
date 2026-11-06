@@ -55,7 +55,16 @@ pub fn set_autostart(enable: bool) -> Result<()> {
     const CREATE_NO_WINDOW: u32 = 0x08000000;
 
     if enable {
-        let exe = env::current_exe().context("failed to get current executable path")?;
+        let exe = if let Some(home) = dirs::home_dir() {
+            let target = home.join(".local").join("bin").join("amaranctl.exe");
+            if target.exists() {
+                target
+            } else {
+                env::current_exe().context("failed to get current executable path")?
+            }
+        } else {
+            env::current_exe().context("failed to get current executable path")?
+        };
         let exe_str = exe.to_string_lossy().to_string();
         let val = format!("\"{}\" run", exe_str);
 
