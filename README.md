@@ -7,6 +7,12 @@
 
 Control your lighting instantly from your **system tray**, with **global hotkeys**, or through lightning-fast **terminal CLI commands** over Bluetooth Low Energy (BLE Mesh).
 
+<p align="center">
+  <img src="docs/assets/demo.gif" alt="amaranctl demo: CLI terminal and system tray side-by-side" width="860">
+  <br>
+  <em>Left: Sub-50ms CLI execution & live hardware status. Right: System tray adaptive icon (2700K–6500K) & hotkeys reaction.</em>
+</p>
+
 ---
 
 ### Special Thanks & Acknowledgements
@@ -198,6 +204,7 @@ make help
 * **`make build-windows`**: Cross-compiles `amaranctl.exe` for Windows (`x86_64-pc-windows-gnu`).
 * **`make build-linux`**: Compiles `amaranctl` for Linux (`x86_64-unknown-linux-gnu`).
 * **`make release`**: Packages binaries into `dist/` as `.zip` and `.tar.gz` with version from git tag and computes `SHA256SUMS.txt`.
+* **`make demo`**: Stitches raw screen recording or renders demo GIF and MP4 assets.
 * **`make clean`**: Cleans `target/` and `dist/` directories.
 
 ---
