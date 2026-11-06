@@ -109,7 +109,13 @@ release: build-all ## Package release binaries with SHA256 checksums into dist/
 
 .PHONY: install-windows
 install-windows: ## Run Windows installation script (PowerShell)
-	@powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install.ps1
+	@if command -v pwsh >/dev/null 2>&1; then \
+		pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install.ps1; \
+	elif command -v powershell.exe >/dev/null 2>&1; then \
+		powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/install.ps1; \
+	else \
+		powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install.ps1; \
+	fi
 
 .PHONY: install-linux
 install-linux: ## Run Linux installation script (Bash)
@@ -117,7 +123,13 @@ install-linux: ## Run Linux installation script (Bash)
 
 .PHONY: demo
 demo: ## Process raw screen recording or render demo GIF & MP4 (e.g. make demo ARGS="-InputFile raw.mp4")
-	@powershell -NoProfile -ExecutionPolicy Bypass -File scripts/render-demo.ps1 $(ARGS)
+	@if command -v pwsh >/dev/null 2>&1; then \
+		pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/render-demo.ps1 $(ARGS); \
+	elif command -v powershell.exe >/dev/null 2>&1; then \
+		powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/render-demo.ps1 $(ARGS); \
+	else \
+		powershell -NoProfile -ExecutionPolicy Bypass -File scripts/render-demo.ps1 $(ARGS); \
+	fi
 
 .PHONY: clean
 clean: ## Clean build target and dist directories

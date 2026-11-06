@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Automated visual walkthrough script for recording the amaranctl demo.
 .DESCRIPTION
@@ -10,19 +10,49 @@
     Simulate command outputs without executing real commands.
 .PARAMETER SkipTypewriter
     Print commands instantly instead of typewriter effect.
+.PARAMETER ExePath
+    Explicit path to amaranctl executable.
 #>
 [CmdletBinding()]
 param(
     [double]$PaceSeconds = 1.5,
     [switch]$DryRun,
-    [switch]$SkipTypewriter
+    [switch]$SkipTypewriter,
+    [string]$ExePath
 )
 
 $ErrorActionPreference = "Stop"
 
-$ExePath = Join-Path $HOME ".local\bin\amaranctl.exe"
-if (-not (Test-Path $ExePath) -and -not $DryRun) {
-    Write-Error "amaranctl executable not found at $ExePath. Run 'scripts/install.ps1' first."
+# Locate amaranctl executable
+if (-not $ExePath) {
+    $candidates = @(
+        (Join-Path $HOME ".local\bin\amaranctl.exe"),
+        (Join-Path (Split-Path $PSScriptRoot -Parent) "target\x86_64-pc-windows-gnu\release\amaranctl.exe"),
+        (Join-Path (Split-Path $PSScriptRoot -Parent) "target\release\amaranctl.exe")
+    )
+    $cmd = Get-Command amaranctl -ErrorAction SilentlyContinue
+    if ($cmd) { $candidates += $cmd.Source }
+
+    foreach ($cand in $candidates) {
+        if ($cand -and (Test-Path $cand)) {
+            $ExePath = $cand
+            break
+        }
+    }
+}
+
+if (-not $DryRun) {
+    if (-not $ExePath -or -not (Test-Path $ExePath)) {
+        Write-Error "amaranctl executable not found. Please run 'scripts/install.ps1' or 'make build-windows' first."
+    }
+
+    # Verify that the background tray daemon is running
+    $daemon = Get-Process -Name "amaranctl" -ErrorAction SilentlyContinue
+    if (-not $daemon) {
+        Write-Warning "amaranctl daemon is not currently running."
+        Write-Warning "Start the daemon with 'amaranctl run' to see the live system tray icon update during recording."
+        Start-Sleep -Seconds 2
+    }
 }
 
 function Write-Typewriter {
@@ -52,16 +82,16 @@ function Write-Typewriter {
 function Show-StepHeader {
     param([string]$Title)
     Write-Host ""
-    Write-Host ("─" * 60) -ForegroundColor DarkGray
-    Write-Host " ▶ $Title" -ForegroundColor Cyan
-    Write-Host ("─" * 60) -ForegroundColor DarkGray
+    Write-Host ("-" * 60) -ForegroundColor DarkGray
+    Write-Host " [Step] $Title" -ForegroundColor Cyan
+    Write-Host ("-" * 60) -ForegroundColor DarkGray
 }
 
 try { Clear-Host } catch {}
-Write-Host "┌──────────────────────────────────────────────────────────┐" -ForegroundColor Cyan
-Write-Host "│  amaranctl — BLE Mesh Controller & Tray Demo             │" -ForegroundColor Cyan
-Write-Host "│  Sub-50ms Local IPC • Adaptive Tray Icon • Hotkeys       │" -ForegroundColor Cyan
-Write-Host "└──────────────────────────────────────────────────────────┘" -ForegroundColor Cyan
+Write-Host "+----------------------------------------------------------+" -ForegroundColor Cyan
+Write-Host "|  amaranctl - BLE Mesh Controller & Tray Demo             |" -ForegroundColor Cyan
+Write-Host "|  Sub-50ms Local IPC * Adaptive Tray Icon * Hotkeys       |" -ForegroundColor Cyan
+Write-Host "+----------------------------------------------------------+" -ForegroundColor Cyan
 Write-Host ""
 Start-Sleep -Seconds 1
 
@@ -79,7 +109,7 @@ Start-Sleep -Seconds $PaceSeconds
 Show-StepHeader "2. Turn light ON (Tray glows Warm Gold)"
 Write-Typewriter "$ amaranctl on" -ForegroundColor Yellow
 if ($DryRun) {
-    Write-Host "✓ Turned ON" -ForegroundColor Green
+    Write-Host "Turned ON" -ForegroundColor Green
 } else {
     & $ExePath on
 }
@@ -89,7 +119,7 @@ Start-Sleep -Seconds $PaceSeconds
 Show-StepHeader "3. Set CCT to Daylight 5600K (Tray shifts to Cool White)"
 Write-Typewriter "$ amaranctl cct 5600" -ForegroundColor Yellow
 if ($DryRun) {
-    Write-Host "✓ CCT set to 5600K" -ForegroundColor Green
+    Write-Host "CCT set to 5600K" -ForegroundColor Green
 } else {
     & $ExePath cct 5600
 }
@@ -97,9 +127,9 @@ Start-Sleep -Seconds $PaceSeconds
 
 # Step 4: Hotkey 1 - Decrease Brightness
 Show-StepHeader "4. Global Hotkey: Decrease Brightness (-10%)"
-Write-Host "⌨️  [HOTKEY PRESSED]  Ctrl + Alt + Down" -ForegroundColor Magenta
+Write-Host "[HOTKEY] Ctrl + Alt + Down (-10% Brightness)" -ForegroundColor Magenta
 if ($DryRun) {
-    Write-Host "✓ Adjusted brightness: -10%" -ForegroundColor Gray
+    Write-Host "Brightness adjusted by -10.0%" -ForegroundColor Gray
 } else {
     & $ExePath brightness -- -10
 }
@@ -107,9 +137,9 @@ Start-Sleep -Seconds $PaceSeconds
 
 # Step 5: Hotkey 2 - Shift Warmer
 Show-StepHeader "5. Global Hotkey: Shift CCT Warmer (-200K)"
-Write-Host "⌨️  [HOTKEY PRESSED]  Ctrl + Alt + Left" -ForegroundColor Magenta
+Write-Host "[HOTKEY] Ctrl + Alt + Left (-200K Warmer)" -ForegroundColor Magenta
 if ($DryRun) {
-    Write-Host "✓ Adjusted CCT: -200K" -ForegroundColor Gray
+    Write-Host "CCT adjusted by -200K" -ForegroundColor Gray
 } else {
     & $ExePath cct -- -200
 }
@@ -119,7 +149,7 @@ Start-Sleep -Seconds $PaceSeconds
 Show-StepHeader "6. Query updated live hardware status"
 Write-Typewriter "$ amaranctl status" -ForegroundColor Yellow
 if ($DryRun) {
-    Write-Host "Amaran 60x S: 🟢 ON | 40% | 5400K" -ForegroundColor Green
+    Write-Host "Amaran 60x S: ON | Brightness: 40.0% | CCT: 5400K" -ForegroundColor Green
 } else {
     & $ExePath status
 }
@@ -129,14 +159,15 @@ Start-Sleep -Seconds $PaceSeconds
 Show-StepHeader "7. Turn light OFF (Tray dims to Ready state)"
 Write-Typewriter "$ amaranctl off" -ForegroundColor Yellow
 if ($DryRun) {
-    Write-Host "✓ Turned OFF" -ForegroundColor DarkGray
+    Write-Host "Turned OFF" -ForegroundColor DarkGray
 } else {
     & $ExePath off
 }
 Start-Sleep -Seconds $PaceSeconds
 
 Write-Host ""
-Write-Host "════════════════════════════════════════════════════════════" -ForegroundColor Green
-Write-Host " ✓ Demo sequence completed successfully!                   " -ForegroundColor Green
-Write-Host "════════════════════════════════════════════════════════════" -ForegroundColor Green
+Write-Host "============================================================" -ForegroundColor Green
+Write-Host " Demo sequence completed successfully!                      " -ForegroundColor Green
+Write-Host "============================================================" -ForegroundColor Green
 Write-Host ""
+

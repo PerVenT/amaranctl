@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Converts and stitches demo recordings into an optimized split-screen GIF and MP4 for README.md.
 .DESCRIPTION
@@ -7,24 +7,32 @@
     If no input video is provided, generates an animated split-screen demo showcasing
     the CLI and adaptive tray icon transitions.
 .PARAMETER InputVideo
-    Path to raw recorded video file (e.g. raw_demo.mp4).
+    Path to raw recorded video file (e.g. raw_demo.mp4). Accepts -InputFile alias.
 .PARAMETER OutputDir
     Directory for generated assets (default: docs/assets).
 .PARAMETER Fps
     Frames per second for output GIF (default: 15).
 .PARAMETER TotalWidth
     Target width in pixels for composite output (default: 960).
+.PARAMETER Sample
+    Force generation of synthetic demonstration asset.
 #>
 [CmdletBinding()]
 param(
+    [Alias("InputFile", "Input", "File")]
     [string]$InputVideo,
-    [string]$OutputDir = (Join-Path (Split-Path $PSScriptRoot -Parent) "docs\assets"),
+    [string]$OutputDir,
     [int]$Fps = 15,
     [int]$TotalWidth = 960,
     [switch]$Sample
 )
 
 $ErrorActionPreference = "Stop"
+
+if (-not $OutputDir) {
+    $scriptParent = if ($PSScriptRoot) { Split-Path $PSScriptRoot -Parent } else { (Get-Location).Path }
+    $OutputDir = Join-Path $scriptParent "docs\assets"
+}
 
 # Ensure output directory exists
 if (-not (Test-Path $OutputDir)) {
@@ -34,35 +42,70 @@ if (-not (Test-Path $OutputDir)) {
 $OutputGif = Join-Path $OutputDir "demo.gif"
 $OutputMp4 = Join-Path $OutputDir "demo.mp4"
 
-# 1. Locate FFmpeg (Host Windows or WSL Debian)
-$FFmpegCmd = "ffmpeg"
+# 1. Locate FFmpeg (Host Windows or WSL)
 $UseWsl = $false
+$WslDistroName = ""
 
-if (Get-Command ffmpeg -ErrorAction SilentlyContinue) {
-    $FFmpegCmd = "ffmpeg"
-} else {
-    $wslCheck = wsl -d Debian which ffmpeg 2>$null
-    if ($wslCheck) {
-        $UseWsl = $true
-        $FFmpegCmd = "wsl -d Debian ffmpeg"
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = "SilentlyContinue"
+try {
+    if (Get-Command ffmpeg -ErrorAction SilentlyContinue) {
+        $UseWsl = $false
     } else {
-        Write-Error "FFmpeg not found. Please install ffmpeg on Windows or in WSL Debian (sudo apt install ffmpeg)."
+        $wslDistros = wsl -l -q 2>$null | Where-Object { $_ -and $_.Trim() -ne "" }
+        if ($wslDistros) {
+            $firstDistro = ($wslDistros[0] -replace '\0', '').Trim()
+            $checkFfmpeg = wsl -d $firstDistro which ffmpeg 2>$null
+            if ($checkFfmpeg) {
+                $UseWsl = $true
+                $WslDistroName = $firstDistro
+            }
+        }
     }
+} finally {
+    $ErrorActionPreference = $prevEap
+}
+
+if (-not $UseWsl -and -not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
+    Write-Error "FFmpeg not found. Please install ffmpeg on Windows or in WSL (sudo apt install ffmpeg)."
+}
+
+function Convert-ToWslPath {
+    param([string]$Path)
+    if (-not $Path) { return $Path }
+    if ($Path -match '^([A-Za-z]):\\(.*)$') {
+        $drive = $Matches[1].ToLower()
+        $sub = $Matches[2] -replace '\\', '/'
+        return "/mnt/$drive/$sub"
+    }
+    return $Path
 }
 
 function Invoke-FFmpeg {
-    param([string]$ArgsString)
-    if ($UseWsl) {
-        # Convert any Windows paths to WSL paths in arguments
-        $wslArgs = [regex]::Replace($ArgsString, '([A-Za-z]):\\([^\s"''`]+)', {
-            param($m)
-            '/mnt/' + $m.Groups[1].Value.ToLower() + '/' + ($m.Groups[2].Value -replace '\\', '/')
-        })
-        wsl -d Debian bash -c "ffmpeg -hide_banner -loglevel warning -y $wslArgs"
-    } else {
-        $procArgs = $ArgsString -split ' '
-        & ffmpeg -hide_banner -loglevel warning -y $procArgs
+    param([string[]]$ArgumentList)
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "SilentlyContinue"
+    try {
+        if ($UseWsl) {
+            # Translate Windows paths to WSL paths in argument vector
+            $wslArgs = @()
+            foreach ($arg in $ArgumentList) {
+                if ($arg -match '^[A-Za-z]:\\') {
+                    $wslArgs += (Convert-ToWslPath $arg)
+                } else {
+                    $wslArgs += $arg
+                }
+            }
+            # Invoke wsl safely with argument vector (no bash -c string interpolation)
+            wsl -d $WslDistroName -- ffmpeg -hide_banner -loglevel warning -y @wslArgs 2>$null
+        } else {
+            # Invoke native Windows ffmpeg safely with argument vector
+            & ffmpeg -hide_banner -loglevel warning -y @ArgumentList
+        }
+    } finally {
+        $ErrorActionPreference = $prevEap
     }
+
     if ($LASTEXITCODE -ne 0) {
         Write-Error "FFmpeg failed with exit code $LASTEXITCODE"
     }
@@ -76,71 +119,63 @@ Write-Host ""
 if ($InputVideo -and (Test-Path $InputVideo) -and -not $Sample) {
     Write-Host "[1/2] Processing raw recording from: $InputVideo..." -ForegroundColor Yellow
 
-    # Calculate dimensions: split screen 50/50
+    # Calculate even dimensions: split screen 50/50
     $halfWidth = [int]($TotalWidth / 2)
-    $halfHeight = [int]($halfWidth * 9 / 16) # 16:9 aspect per half
+    if ($halfWidth % 2 -ne 0) { $halfWidth++ }
+    $halfHeight = [int]($halfWidth * 9 / 16)
+    if ($halfHeight % 2 -ne 0) { $halfHeight++ }
 
-    # Filter: crop left half for terminal, crop bottom-right quarter for tray and upscale 2x
-    # Stitches them horizontally
     $filterComplex = "[0:v]crop=iw/2:ih:0:0,scale=${halfWidth}:${halfHeight}[term];" +
                      "[0:v]crop=iw/4:ih/4:3*iw/4:3*ih/4,scale=${halfWidth}:${halfHeight}:flags=lanczos[tray];" +
                      "[term][tray]hstack[v]"
 
     Write-Host "    Encoding MP4 video..." -ForegroundColor DarkGray
-    Invoke-FFmpeg "-i `"$InputVideo`" -filter_complex `"$filterComplex`" -map `"[v]`" -r $Fps -c:v libx264 -pix_fmt yuv420p -crf 22 `"$OutputMp4`""
+    Invoke-FFmpeg @("-i", $InputVideo, "-filter_complex", $filterComplex, "-map", "[v]", "-r", "$Fps", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "22", $OutputMp4)
 
     Write-Host "    Generating palette-optimized GIF..." -ForegroundColor DarkGray
     $paletteFilter = "$filterComplex;[v]split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5"
-    Invoke-FFmpeg "-i `"$InputVideo`" -filter_complex `"$paletteFilter`" -r $Fps `"$OutputGif`""
+    Invoke-FFmpeg @("-i", $InputVideo, "-filter_complex", $paletteFilter, "-r", "$Fps", $OutputGif)
 
 } else {
     Write-Host "[1/2] Generating synchronized animated split-screen demo..." -ForegroundColor Yellow
 
-    # Generate an elegant 10-second synthetic demonstration:
-    # Left: Terminal with simulated typing and IPC responses
-    # Right: Taskbar Tray with live adaptive CCT color transitions (Gray -> Warm 3200K -> Daylight 5600K -> Off)
     $duration = 10
     $halfWidth = [int]($TotalWidth / 2)
+    if ($halfWidth % 2 -ne 0) { $halfWidth++ }
     $height = 360
 
-    # Build an FFmpeg filtergraph creating terminal and tray panels
+    # Build an FFmpeg filtergraph:
+    # Left: Terminal with simulated typing and IPC responses
+    # Right: Taskbar Tray with live adaptive CCT color transitions (Gray -> Warm 3200K -> Daylight 5600K -> Off)
     $fg = "color=c=0x1e1e2e:s=${halfWidth}x${height}:d=${duration}[term_bg];" +
           "color=c=0x181825:s=${halfWidth}x${height}:d=${duration}[tray_bg];" +
-          # Terminal text overlays
           "[term_bg]drawtext=text='amaranctl terminal (IPC)':fontsize=16:fontcolor=0x89b4fa:x=20:y=20," +
           "drawtext=text='$ amaranctl status':fontsize=15:fontcolor=0xf9e2af:x=20:y=60:enable='gte(t,0.5)'," +
           "drawtext=text='Amaran 60x S\: OFF (Ready)':fontsize=14:fontcolor=0xa6adc8:x=20:y=85:enable='gte(t,1.0)'," +
           "drawtext=text='$ amaranctl on':fontsize=15:fontcolor=0xf9e2af:x=20:y=125:enable='gte(t,2.0)'," +
-          "drawtext=text='✓ Turned ON  [IPC <50ms]':fontsize=14:fontcolor=0xa6e3a1:x=20:y=150:enable='gte(t,2.4)'," +
+          "drawtext=text='Turned ON  [IPC <50ms]':fontsize=14:fontcolor=0xa6e3a1:x=20:y=150:enable='gte(t,2.4)'," +
           "drawtext=text='$ amaranctl cct 5600':fontsize=15:fontcolor=0xf9e2af:x=20:y=190:enable='gte(t,4.5)'," +
-          "drawtext=text='✓ CCT set to 5600K Daylight':fontsize=14:fontcolor=0x89dceb:x=20:y=215:enable='gte(t,4.9)'," +
+          "drawtext=text='CCT set to 5600K Daylight':fontsize=14:fontcolor=0x89dceb:x=20:y=215:enable='gte(t,4.9)'," +
           "drawtext=text='[Hotkey] Ctrl+Alt+Down (-10 pct)':fontsize=14:fontcolor=0xcba6f7:x=20:y=255:enable='gte(t,7.0)'," +
           "drawtext=text='$ amaranctl off':fontsize=15:fontcolor=0xf9e2af:x=20:y=295:enable='gte(t,8.5)'[term];" +
-          # Tray panel overlays (showing adaptive lamp icon transitioning)
           "[tray_bg]drawtext=text='Windows System Tray':fontsize=16:fontcolor=0xa6adc8:x=20:y=20," +
-          # Tray icon backdrop circle
           "drawbox=x=${halfWidth}/2-45:y=${height}/2-45:w=90:h=90:color=0x313244:t=fill," +
-          # Off state: gray bulb (t < 2.0 and t >= 8.8)
           "drawbox=x=${halfWidth}/2-25:y=${height}/2-25:w=50:h=50:color=0x585b70:t=fill:enable='lt(t,2.0)+gte(t,8.8)'," +
-          "drawtext=text='⚪ OFF':fontsize=16:fontcolor=0xa6adc8:x=${halfWidth}/2-30:y=${height}/2+60:enable='lt(t,2.0)+gte(t,8.8)'," +
-          # On state 3200K: Warm Gold bulb (2.0 <= t < 4.8)
+          "drawtext=text='[o] OFF':fontsize=16:fontcolor=0xa6adc8:x=${halfWidth}/2-35:y=${height}/2+60:enable='lt(t,2.0)+gte(t,8.8)'," +
           "drawbox=x=${halfWidth}/2-25:y=${height}/2-25:w=50:h=50:color=0xffaa33:t=fill:enable='between(t,2.0,4.8)'," +
-          "drawtext=text='💡 ON | 3200K Warm':fontsize=16:fontcolor=0xffaa33:x=${halfWidth}/2-70:y=${height}/2+60:enable='between(t,2.0,4.8)'," +
-          # On state 5600K: Cool Cyan/White bulb (4.8 <= t < 8.8)
+          "drawtext=text='(*) ON | 3200K Warm':fontsize=16:fontcolor=0xffaa33:x=${halfWidth}/2-75:y=${height}/2+60:enable='between(t,2.0,4.8)'," +
           "drawbox=x=${halfWidth}/2-25:y=${height}/2-25:w=50:h=50:color=0xcce6ff:t=fill:enable='between(t,4.8,8.8)'," +
-          "drawtext=text='💡 ON | 5600K Daylight':fontsize=16:fontcolor=0xcce6ff:x=${halfWidth}/2-80:y=${height}/2+60:enable='between(t,4.8,8.8)'," +
-          # Hotkey indicator badge
+          "drawtext=text='(*) ON | 5600K Daylight':fontsize=16:fontcolor=0xcce6ff:x=${halfWidth}/2-85:y=${height}/2+60:enable='between(t,4.8,8.8)'," +
           "drawbox=x=${halfWidth}/2-120:y=300:w=240:h=36:color=0x45475a:t=fill:enable='between(t,7.0,8.4)'," +
-          "drawtext=text='⌨️ Ctrl+Alt+Down':fontsize=14:fontcolor=0xf5c2e7:x=${halfWidth}/2-75:y=310:enable='between(t,7.0,8.4)'[tray];" +
-          # Combine horizontally
+          "drawtext=text='[KEY] Ctrl+Alt+Down':fontsize=14:fontcolor=0xf5c2e7:x=${halfWidth}/2-75:y=310:enable='between(t,7.0,8.4)'[tray];" +
           "[term][tray]hstack[v]"
 
     Write-Host "    Generating MP4 demo..." -ForegroundColor DarkGray
-    Invoke-FFmpeg "-f lavfi -i `"nullsrc=s=${TotalWidth}x${height}:d=${duration}`" -filter_complex `"$fg`" -map `"[v]`" -r $Fps -c:v libx264 -pix_fmt yuv420p -crf 20 `"$OutputMp4`""
+    Invoke-FFmpeg @("-f", "lavfi", "-i", "nullsrc=s=${TotalWidth}x${height}:d=${duration}", "-filter_complex", $fg, "-map", "[v]", "-r", "$Fps", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", $OutputMp4)
 
     Write-Host "    Generating optimized GIF..." -ForegroundColor DarkGray
     $gifFg = "$fg;[v]split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5"
-    Invoke-FFmpeg "-f lavfi -i `"nullsrc=s=${TotalWidth}x${height}:d=${duration}`" -filter_complex `"$gifFg`" -r $Fps `"$OutputGif`""
+    Invoke-FFmpeg @("-f", "lavfi", "-i", "nullsrc=s=${TotalWidth}x${height}:d=${duration}", "-filter_complex", $gifFg, "-r", "$Fps", $OutputGif)
 }
 
 Write-Host ""
@@ -152,3 +187,6 @@ $mp4Item = Get-Item $OutputMp4
 Write-Host ("GIF:  {0} ({1:N1} KB)" -f $OutputGif, ($gifItem.Length / 1KB)) -ForegroundColor Green
 Write-Host ("MP4:  {0} ({1:N1} KB)" -f $OutputMp4, ($mp4Item.Length / 1KB)) -ForegroundColor Green
 Write-Host ""
+
+
+
