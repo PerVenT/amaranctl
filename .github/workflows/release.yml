@@ -4,9 +4,18 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Release tag (e.g. v0.1.0)"
+        required: false
+        default: "v0.1.0"
 
 permissions:
   contents: write
+
+env:
+  RELEASE_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag_name || 'v0.1.0' }}
 
 jobs:
   build:
@@ -19,17 +28,17 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: amaranctl.exe
-            asset_name: amaranctl-${{ github.ref_name }}-x86_64-pc-windows-msvc.zip
+            archive_ext: zip
             archive_type: zip
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact_name: amaranctl
-            asset_name: amaranctl-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz
+            archive_ext: tar.gz
             archive_type: tar
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             artifact_name: amaranctl
-            asset_name: amaranctl-${{ github.ref_name }}-aarch64-unknown-linux-gnu.tar.gz
+            archive_ext: tar.gz
             archive_type: tar
 
     steps:
@@ -64,30 +73,33 @@ jobs:
         if: matrix.archive_type == 'zip'
         shell: pwsh
         run: |
+          $assetName = "amaranctl-$env:RELEASE_VERSION-${{ matrix.target }}.${{ matrix.archive_ext }}"
           $binPath = "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}"
-          Compress-Archive -Path $binPath -DestinationPath ${{ matrix.asset_name }}
-          $hash = (Get-FileHash -Algorithm SHA256 ${{ matrix.asset_name }}).Hash.ToLower()
-          "$hash  ${{ matrix.asset_name }}" | Out-File -Encoding utf8 -FilePath "${{ matrix.asset_name }}.sha256"
+          Compress-Archive -Path $binPath -DestinationPath $assetName
+          $hash = (Get-FileHash -Algorithm SHA256 $assetName).Hash.ToLower()
+          "$hash  $assetName" | Out-File -Encoding utf8 -FilePath "$assetName.sha256"
 
       - name: Package Linux archive (tar.gz)
         if: matrix.archive_type == 'tar'
         shell: bash
         run: |
-          tar -czf "${{ matrix.asset_name }}" -C "target/${{ matrix.target }}/release" "${{ matrix.artifact_name }}"
-          sha256sum "${{ matrix.asset_name }}" > "${{ matrix.asset_name }}.sha256"
+          ASSET_NAME="amaranctl-${RELEASE_VERSION}-${{ matrix.target }}.${{ matrix.archive_ext }}"
+          tar -czf "$ASSET_NAME" -C "target/${{ matrix.target }}/release" "${{ matrix.artifact_name }}"
+          sha256sum "$ASSET_NAME" > "$ASSET_NAME.sha256"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: assets-${{ matrix.target }}
           path: |
-            ${{ matrix.asset_name }}
-            ${{ matrix.asset_name }}.sha256
+            amaranctl-*
 
   publish:
     name: Publish GitHub Release
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -109,6 +121,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_VERSION }}
+          name: ${{ env.RELEASE_VERSION }}
           files: release-assets/*
           generate_release_notes: true
           draft: false
