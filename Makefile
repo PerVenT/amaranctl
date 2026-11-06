@@ -115,6 +115,10 @@ install-windows: ## Run Windows installation script (PowerShell)
 install-linux: ## Run Linux installation script (Bash)
 	@bash scripts/install.sh
 
+.PHONY: demo
+demo: ## Process raw screen recording or render demo GIF & MP4 (e.g. make demo ARGS="-InputFile raw.mp4")
+	@powershell -NoProfile -ExecutionPolicy Bypass -File scripts/render-demo.ps1 $(ARGS)
+
 .PHONY: clean
 clean: ## Clean build target and dist directories
 	@echo "==> Cleaning build artifacts..."
