@@ -33,12 +33,8 @@ pub async fn send_ipc_command(cmd: &IpcCommand) -> Result<IpcResponse> {
             loop {
                 match ClientOptions::new().open(WINDOWS_PIPE_NAME) {
                     Ok(c) => return Ok(c),
-                    Err(e) if e.raw_os_error() == Some(2) => {
-                        // ERROR_FILE_NOT_FOUND (daemon pipe does not exist)
-                        return Err(anyhow::anyhow!("IPC pipe does not exist"));
-                    }
-                    Err(e) if e.raw_os_error() == Some(231) => {
-                        // ERROR_PIPE_BUSY
+                    Err(e) if e.raw_os_error() == Some(2) || e.raw_os_error() == Some(231) => {
+                        // ERROR_FILE_NOT_FOUND (pipe starting up) or ERROR_PIPE_BUSY: retry
                         tokio::time::sleep(Duration::from_millis(10)).await;
                     }
                     Err(e) => return Err(anyhow::Error::from(e)),
