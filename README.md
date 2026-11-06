@@ -1,6 +1,7 @@
 # amaranctl
 
-[![CI](https://github.com/amaranctl/amaranctl/actions/workflows/ci.yml/badge.svg)](https://github.com/amaranctl/amaranctl/actions/workflows/ci.yml)
+[![CI](https://github.com/PerVenT/amaranctl/actions/workflows/ci.yml/badge.svg)](https://github.com/PerVenT/amaranctl/actions/workflows/ci.yml)
+[![Release](https://github.com/PerVenT/amaranctl/actions/workflows/release.yml/badge.svg)](https://github.com/PerVenT/amaranctl/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 **amaranctl** is an ultra-lightweight, high-performance native controller and background tray daemon for Aputure Amaran studio lights (such as the 60x, 60x S, 100d, 200x, and similar models).
@@ -10,7 +11,7 @@ Control your lighting instantly from your **system tray**, with **global hotkeys
 <p align="center">
   <img src="docs/assets/demo.gif" alt="amaranctl demo: CLI terminal and system tray side-by-side" width="860">
   <br>
-  <em>Left: Sub-50ms CLI execution & live hardware status. Right: System tray adaptive icon (2700K–6500K) & hotkeys reaction.</em>
+  <em>CLI execution & live hardware status. System tray adaptive icon (2700K–6500K) & hotkeys reaction.</em>
 </p>
 
 ---
@@ -56,7 +57,7 @@ To ensure clean system integration without clutter, `amaranctl` uses standard us
 
 `amaranctl` requires your local mesh network keys to securely authenticate with your lamps.
 
-### Automatic Import (Zero Manual Configuration)
+### Automatic Import
 On first launch, if no config is found at `~/.config/amaranctl/config.json`, `amaranctl` automatically locates your local Amaran Desktop SQLite database (`amaran.db`), extracts your mesh UUID, network key, application key, and paired lights, and writes a clean config file to `~/.config/amaranctl/config.json`.
 
 ### Manual Configuration
@@ -197,36 +198,9 @@ make help
 ### Common Targets
 
 * **`make image`**: Builds the builder container (`Dockerfile`) using `buildx`.
-* **`make test`**: Runs the entire test suite (`cargo test`) inside the container.
-* **`make check`**: Runs `cargo clippy --all-targets -- -D warnings`.
-* **`make fmt`**: Automatically formats the codebase with `rustfmt`.
-* **`make fmt-check`**: Validates formatting without modifying files (used in CI).
 * **`make build-windows`**: Cross-compiles `amaranctl.exe` for Windows (`x86_64-pc-windows-gnu`).
 * **`make build-linux`**: Compiles `amaranctl` for Linux (`x86_64-unknown-linux-gnu`).
 * **`make release`**: Packages binaries into `dist/` as `.zip` and `.tar.gz` with version from git tag and computes `SHA256SUMS.txt`.
-* **`make demo`**: Stitches raw screen recording or renders demo GIF and MP4 assets.
-* **`make clean`**: Cleans `target/` and `dist/` directories.
-
----
-
-## CI / CD & Multi-Arch Releases
-
-The repository includes GitHub Actions workflows configured in [`.github/workflows/`](.github/workflows/):
-
-1. **Continuous Integration (`ci.yml`):**
-   * Triggered on pull requests and pushes to `main`.
-   * Checks code formatting (`rustfmt`).
-   * Runs Clippy linter with zero warnings (`cargo clippy`).
-   * Executes full unit and integration test suite.
-
-2. **Automated Release (`release.yml`):**
-   * Triggered on pushing a release tag (`v*`, e.g. `v0.1.0`).
-   * Builds release binaries for:
-     * **Windows x86_64** (`x86_64-pc-windows-msvc`)
-     * **Linux x86_64** (`x86_64-unknown-linux-gnu`)
-     * **Linux ARM64** (`aarch64-unknown-linux-gnu` via native ARM runner)
-   * Packages archives with SHA256 checksums (`SHA256SUMS.txt`).
-   * Automatically publishes the GitHub Release with generated release notes and downloadable assets.
 
 ---
 
