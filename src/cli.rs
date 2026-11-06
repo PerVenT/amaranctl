@@ -35,12 +35,18 @@ pub enum Commands {
     },
     #[command(about = "Set brightness: 0..100% (or relative: +10, -10)")]
     Brightness {
-        #[arg(allow_hyphen_values = true, help = "Brightness value: 0..100 (percentage) or relative (+10, -10)")]
+        #[arg(
+            allow_hyphen_values = true,
+            help = "Brightness value: 0..100 (percentage) or relative (+10, -10)"
+        )]
         value: String,
     },
     #[command(about = "Set color temperature: 2700K - 6500K (or relative: +500, -500)")]
     Cct {
-        #[arg(allow_hyphen_values = true, help = "Color temperature in Kelvin (2700 - 6500) or relative (+500, -500)")]
+        #[arg(
+            allow_hyphen_values = true,
+            help = "Color temperature in Kelvin (2700 - 6500) or relative (+500, -500)"
+        )]
         value: String,
     },
     #[command(about = "Run background daemon with tray icon and global hotkeys")]

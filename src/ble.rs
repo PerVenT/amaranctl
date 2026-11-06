@@ -1,10 +1,12 @@
-use std::sync::Arc;
-use std::time::Duration;
 use anyhow::{bail, Context, Result};
-use btleplug::api::{Central, Characteristic, Manager as _, Peripheral as _, ScanFilter, WriteType};
+use btleplug::api::{
+    Central, Characteristic, Manager as _, Peripheral as _, ScanFilter, WriteType,
+};
 use btleplug::platform::{Manager, Peripheral};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
@@ -12,7 +14,8 @@ use crate::config::AppConfig;
 use crate::mesh::{
     build_proxy_config_pdu, build_proxy_pdu, decode_telink_status, decrypt_proxy_pdu,
     encode_brightness, encode_brightness_raw, encode_cct, encode_onoff, encode_status_request,
-    MeshSecurityContext, PROXY_CFG_ADD_ADDRESSES, PROXY_CFG_SET_FILTER_TYPE, PROXY_FILTER_WHITELIST,
+    MeshSecurityContext, PROXY_CFG_ADD_ADDRESSES, PROXY_CFG_SET_FILTER_TYPE,
+    PROXY_FILTER_WHITELIST,
 };
 
 pub const PROXY_DATA_IN_UUID: Uuid = Uuid::from_u128(0x00002add_0000_1000_8000_00805f9b34fb);
@@ -48,7 +51,10 @@ impl LampStatus {
         } else if !self.connected {
             "Amaran 60x S — 🔴 Немає зв'язку (перевірте живлення лампи)".to_string()
         } else if self.power {
-            format!("Amaran 60x S — 🟢 ON | {:.0}% | {}K", self.brightness, self.cct)
+            format!(
+                "Amaran 60x S — 🟢 ON | {:.0}% | {}K",
+                self.brightness, self.cct
+            )
         } else {
             "Amaran 60x S — ⚪ OFF (Готовий)".to_string()
         }
@@ -75,10 +81,12 @@ impl BleMeshClient {
 
         // Initialize monotonic sequence number in the 12M..16M range
         // to avoid replay protection rejections across program restarts
-        let initial_seq = 12_000_000 + (std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as u32 % 4_000_000);
+        let initial_seq = 12_000_000
+            + (std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as u32
+                % 4_000_000);
 
         Ok(Self {
             config,
@@ -207,10 +215,19 @@ impl BleMeshClient {
     pub async fn connect(&mut self) -> Result<()> {
         self.status.write().await.connecting = true;
         let manager = Manager::new().await.context("failed to get BLE manager")?;
-        let adapters = manager.adapters().await.context("failed to list BLE adapters")?;
-        let adapter = adapters.into_iter().next().context("no Bluetooth adapter found on system")?;
+        let adapters = manager
+            .adapters()
+            .await
+            .context("failed to list BLE adapters")?;
+        let adapter = adapters
+            .into_iter()
+            .next()
+            .context("no Bluetooth adapter found on system")?;
 
-        adapter.start_scan(ScanFilter::default()).await.context("failed to start BLE scan")?;
+        adapter
+            .start_scan(ScanFilter::default())
+            .await
+            .context("failed to start BLE scan")?;
 
         let light = self.config.primary_light().context("no light configured")?;
         let target_mac = light.mac.replace(':', "").to_uppercase();
@@ -231,7 +248,11 @@ impl BleMeshClient {
                 if let Ok(Some(props)) = p.properties().await {
                     let addr = props.address.to_string().replace(':', "").to_uppercase();
                     let name = props.local_name.unwrap_or_default();
-                    if addr == target_mac || name == *target_name || name.contains(&target_mac) || name == "Mesh Device" {
+                    if addr == target_mac
+                        || name == *target_name
+                        || name.contains(&target_mac)
+                        || name == "Mesh Device"
+                    {
                         matched_peripheral = Some(p);
                         break;
                     }
@@ -250,7 +271,11 @@ impl BleMeshClient {
                 let mut s = self.status.write().await;
                 s.connecting = false;
                 s.connected = false;
-                bail!("Could not find target Amaran light '{}' ({})", target_name, target_mac);
+                bail!(
+                    "Could not find target Amaran light '{}' ({})",
+                    target_name,
+                    target_mac
+                );
             }
         };
 
@@ -285,7 +310,9 @@ impl BleMeshClient {
                 let iv = self.iv_index;
                 tokio::spawn(async move {
                     while let Some(notif) = stream.next().await {
-                        if let Ok((_src, _dst, payload)) = decrypt_proxy_pdu(&sec_clone, iv, &notif.value) {
+                        if let Ok((_src, _dst, payload)) =
+                            decrypt_proxy_pdu(&sec_clone, iv, &notif.value)
+                        {
                             if let Some(decoded) = decode_telink_status(&payload) {
                                 let mut s = status_clone.write().await;
                                 s.connected = true;
@@ -314,7 +341,9 @@ impl BleMeshClient {
             PROXY_CFG_SET_FILTER_TYPE,
             &[PROXY_FILTER_WHITELIST],
         )?;
-        let _ = peripheral.write(&char_in, &pdu_filter, WriteType::WithoutResponse).await;
+        let _ = peripheral
+            .write(&char_in, &pdu_filter, WriteType::WithoutResponse)
+            .await;
 
         let seq2 = self.next_seq();
         let pdu_addr = build_proxy_config_pdu(
@@ -325,7 +354,9 @@ impl BleMeshClient {
             PROXY_CFG_ADD_ADDRESSES,
             &[(LOCAL_SRC_ADDR >> 8) as u8, (LOCAL_SRC_ADDR & 0xff) as u8],
         )?;
-        let _ = peripheral.write(&char_in, &pdu_addr, WriteType::WithoutResponse).await;
+        let _ = peripheral
+            .write(&char_in, &pdu_addr, WriteType::WithoutResponse)
+            .await;
 
         self.char_in = Some(char_in);
         self.peripheral = Some(peripheral);
@@ -354,7 +385,10 @@ impl BleMeshClient {
     pub async fn send_raw_pdu(&mut self, pdu: &[u8]) -> Result<()> {
         self.ensure_connected().await?;
         let peripheral = self.peripheral.as_ref().context("not connected to light")?;
-        let char_in = self.char_in.as_ref().context("characteristic not initialized")?;
+        let char_in = self
+            .char_in
+            .as_ref()
+            .context("characteristic not initialized")?;
 
         peripheral
             .write(char_in, pdu, WriteType::WithoutResponse)

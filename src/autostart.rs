@@ -29,7 +29,12 @@ pub fn is_autostart_enabled() -> bool {
     const CREATE_NO_WINDOW: u32 = 0x08000000;
 
     let output = Command::new("reg")
-        .args(["query", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run", "/v", "amaranctl"])
+        .args([
+            "query",
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+            "/v",
+            "amaranctl",
+        ])
         .creation_flags(CREATE_NO_WINDOW)
         .output();
 
@@ -114,12 +119,20 @@ pub fn set_autostart(enable: bool) -> Result<()> {
         let content = get_linux_service_content(&exe.to_string_lossy());
         fs::write(&unit_file, content).context("failed to write systemd unit file")?;
 
-        let _ = Command::new("systemctl").args(["--user", "daemon-reload"]).status();
-        let _ = Command::new("systemctl").args(["--user", "enable", "amaranctl"]).status();
+        let _ = Command::new("systemctl")
+            .args(["--user", "daemon-reload"])
+            .status();
+        let _ = Command::new("systemctl")
+            .args(["--user", "enable", "amaranctl"])
+            .status();
     } else {
-        let _ = Command::new("systemctl").args(["--user", "disable", "amaranctl"]).status();
+        let _ = Command::new("systemctl")
+            .args(["--user", "disable", "amaranctl"])
+            .status();
         let _ = fs::remove_file(&unit_file);
-        let _ = Command::new("systemctl").args(["--user", "daemon-reload"]).status();
+        let _ = Command::new("systemctl")
+            .args(["--user", "daemon-reload"])
+            .status();
     }
     Ok(())
 }

@@ -1,5 +1,16 @@
-# scripts/install.ps1 - Automated installer for amaranctl on Windows
-# Clean, fast installer with zero dependencies.
+<#
+.SYNOPSIS
+    Installs amaranctl on Windows into ~/.local/bin/amaranctl.exe and sets up autostart.
+.DESCRIPTION
+    Builds the binary via container (Podman in WSL) or uses an existing build / release download,
+    copies the executable to ~/.local/bin/amaranctl.exe, adds ~/.local/bin to User PATH if missing,
+    and configures Windows autostart.
+#>
+[CmdletBinding()]
+param(
+    [switch]$SkipBuild,
+    [switch]$StartDaemon
+)
 
 $ErrorActionPreference = "Stop"
 
@@ -8,65 +19,118 @@ Write-Host "       amaranctl Windows Installer        " -ForegroundColor Cyan
 Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host ""
 
-# 1. Setup installation directories
-Write-Host "[1/3] Setting up amaranctl executable..." -ForegroundColor Yellow
-$installDir = "$env:LOCALAPPDATA\Programs\amaranctl"
-if (-not (Test-Path $installDir)) {
-    New-Item -ItemType Directory -Path $installDir -Force | Out-Null
-}
-$targetExe = "$installDir\amaranctl.exe"
+$ScriptsDir = $PSScriptRoot
+$ProjectRoot = Split-Path $ScriptsDir -Parent
+$TargetDir = Join-Path $HOME ".local\bin"
+$TargetExe = Join-Path $TargetDir "amaranctl.exe"
+$BuiltExe = Join-Path $ProjectRoot "target\x86_64-pc-windows-gnu\release\amaranctl.exe"
 
-$localExe = Join-Path $PSScriptRoot "..\amaranctl.exe"
-if (Test-Path $localExe) {
-    Copy-Item -Path $localExe -Destination $targetExe -Force
-    Write-Host "    Installed binary: $targetExe" -ForegroundColor Green
-} else {
-    Write-Host "    Downloading latest amaranctl.exe from GitHub releases..." -ForegroundColor Cyan
-    $repo = "amaranctl/amaranctl"
-    $downloadUrl = "https://github.com/$repo/releases/latest/download/amaranctl-windows.exe"
-    try {
-        Invoke-WebRequest -Uri $downloadUrl -OutFile $targetExe -UseBasicParsing
-        Write-Host "    Downloaded binary: $targetExe" -ForegroundColor Green
-    } catch {
-        Write-Host "    [!] Could not download automatically. Please place amaranctl.exe in $installDir" -ForegroundColor Yellow
+# 1. Build if requested and not skipped
+if (-not $SkipBuild) {
+    $BuildScript = Join-Path $ScriptsDir "build-windows.sh"
+    if (Test-Path $BuildScript) {
+        Write-Host "[1/4] Building Windows release binary via container..." -ForegroundColor Yellow
+        $WslScriptPath = ($BuildScript -replace '\\', '/') -replace '^([A-Za-z]):', { '/mnt/' + $_.Groups[1].Value.ToLower() }
+        try {
+            wsl -d Debian bash $WslScriptPath
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning "Container build returned non-zero code ($LASTEXITCODE)."
+            }
+        } catch {
+            Write-Warning "Could not run container build via WSL: $_"
+        }
     }
 }
 
-# Also update ~/.local/bin if directory exists
-$localBin = "$HOME\.local\bin"
-if (Test-Path $localBin) {
-    Copy-Item -Path $targetExe -Destination "$localBin\amaranctl.exe" -Force -ErrorAction SilentlyContinue
+# 2. Check for binary or fallback download
+Write-Host "[2/4] Verifying binary..." -ForegroundColor Yellow
+if (-not (Test-Path $BuiltExe)) {
+    if (Test-Path $TargetExe) {
+        Write-Host "    Found existing installed binary at $TargetExe." -ForegroundColor DarkGray
+    } else {
+        Write-Host "    Local build not found. Attempting download from GitHub releases..." -ForegroundColor Cyan
+        $downloadUrl = "https://github.com/amaranctl/amaranctl/releases/latest/download/amaranctl-x86_64-pc-windows-gnu.exe"
+        if (-not (Test-Path $TargetDir)) {
+            New-Item -ItemType Directory -Path $TargetDir -Force | Out-Null
+        }
+        try {
+            Invoke-WebRequest -Uri $downloadUrl -OutFile $TargetExe -UseBasicParsing
+            Write-Host "    Downloaded binary to $TargetExe" -ForegroundColor Green
+        } catch {
+            Write-Error "Binary not found at $BuiltExe and could not download automatically. Please build first using 'make build-windows' or place amaranctl.exe in $TargetDir"
+        }
+    }
 }
 
-# Add to User PATH if missing
-$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-if ($userPath -notlike "*$installDir*") {
-    [Environment]::SetEnvironmentVariable("Path", "$userPath;$installDir", "User")
-    $env:Path = "$env:Path;$installDir"
-    Write-Host "    Added $installDir to User PATH." -ForegroundColor Green
+# 3. Stop running daemon before updating file
+$Running = Get-Process amaranctl -ErrorAction SilentlyContinue
+if ($Running) {
+    Write-Host "==> Stopping running amaranctl daemon (PID: $($Running.Id))..." -ForegroundColor Yellow
+    Stop-Process -Id $Running.Id -Force
+    Start-Sleep -Milliseconds 500
 }
 
-# 2. Autostart setup
-Write-Host "[2/3] Autostart configuration..." -ForegroundColor Yellow
-$choice = Read-Host "Start amaranctl automatically when you log into Windows? (Y/n)"
-if ($choice -eq "" -or $choice.ToLower() -eq "y") {
-    $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
-    Set-ItemProperty -Path $regPath -Name "amaranctl" -Value "`"$targetExe`""
-    Write-Host "    Autostart enabled in Windows Registry." -ForegroundColor Green
+# 4. Copy binary to ~/.local/bin
+if (Test-Path $BuiltExe) {
+    if (-not (Test-Path $TargetDir)) {
+        New-Item -ItemType Directory -Path $TargetDir -Force | Out-Null
+    }
+    Write-Host "[3/4] Installing amaranctl to $TargetExe..." -ForegroundColor Yellow
+    Copy-Item $BuiltExe $TargetExe -Force
 }
 
-# 3. First-run bootstrap check
-Write-Host "[3/3] Configuration ready." -ForegroundColor Yellow
-Write-Host "    amaranctl automatically detects and imports credentials from Amaran Desktop on first run." -ForegroundColor Gray
+# 5. Clean up redundant old locations if present
+$OldRootExe = Join-Path $ProjectRoot "amaranctl.exe"
+if (Test-Path $OldRootExe) {
+    Write-Host "    Cleaning up redundant root binary $OldRootExe..." -ForegroundColor DarkGray
+    Remove-Item $OldRootExe -Force -ErrorAction SilentlyContinue
+}
+$OldLocalAppExe = Join-Path $env:LOCALAPPDATA "Programs\amaranctl\amaranctl.exe"
+if (Test-Path $OldLocalAppExe) {
+    Write-Host "    Cleaning up redundant binary in LocalAppData..." -ForegroundColor DarkGray
+    Remove-Item (Split-Path $OldLocalAppExe -Parent) -Recurse -Force -ErrorAction SilentlyContinue
+}
 
-Write-Host ""
-Write-Host "==========================================" -ForegroundColor Green
-Write-Host "        Installation Successful!          " -ForegroundColor Green
-Write-Host "==========================================" -ForegroundColor Green
-Write-Host "Binary:  $targetExe"
+# 6. Ensure ~/.local/bin is in User PATH
+$UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if ($UserPath -notlike "*$TargetDir*") {
+    [Environment]::SetEnvironmentVariable("Path", "$UserPath;$TargetDir", "User")
+    $env:Path = "$env:Path;$TargetDir"
+    Write-Host "    Added $TargetDir to User PATH." -ForegroundColor Green
+}
+
+# 7. Configure Windows Autostart from ~/.local/bin\amaranctl.exe
+Write-Host "[4/4] Configuring Windows Autostart..." -ForegroundColor Yellow
+$RegKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+$RegVal = "`"$TargetExe`" run"
+Set-ItemProperty -Path $RegKey -Name "amaranctl" -Value $RegVal
+Write-Host "    Autostart registered in registry: $RegVal" -ForegroundColor Green
+
+# 8. Verify installation
+try {
+    $VersionOutput = & $TargetExe --version
+    Write-Host ""
+    Write-Host "==========================================" -ForegroundColor Green
+    Write-Host "        Installation Successful!          " -ForegroundColor Green
+    Write-Host "==========================================" -ForegroundColor Green
+    Write-Host "Version:  $VersionOutput"
+    Write-Host "Binary:   $TargetExe"
+    Write-Host "Autostart: $RegVal"
+} catch {
+    Write-Warning "Could not execute $($TargetExe): $_"
+}
+
 Write-Host ""
 Write-Host "Usage:"
-Write-Host "  Tray app:  Run 'amaranctl' or double-click amaranctl.exe"
-Write-Host "  CLI:       amaranctl on | off | toggle | brightness 50 | cct 4500"
-Write-Host "  Hotkeys:   Ctrl+Alt+L (Toggle), Ctrl+Alt+Up/Down (Brightness), Ctrl+Alt+Left/Right (CCT)"
+Write-Host "  Tray app / daemon:  amaranctl run"
+Write-Host "  CLI commands:       amaranctl status"
+Write-Host "                      amaranctl on | off | toggle"
+Write-Host "                      amaranctl brightness 50"
+Write-Host "                      amaranctl cct 4500"
+Write-Host "  Hotkeys:            Ctrl+Alt+L (Toggle), Ctrl+Alt+Up/Down (Brightness), Ctrl+Alt+Left/Right (CCT)"
 Write-Host ""
+
+if ($StartDaemon) {
+    Write-Host "==> Launching amaranctl daemon..." -ForegroundColor Cyan
+    Start-Process -FilePath $TargetExe -ArgumentList "run"
+}

@@ -29,25 +29,22 @@ pub const WINDOWS_PIPE_NAME: &str = r"\\.\pipe\amaranctl";
 pub async fn send_ipc_command(cmd: &IpcCommand) -> Result<IpcResponse> {
     use tokio::net::windows::named_pipe::ClientOptions;
 
-    let client = tokio::time::timeout(
-        Duration::from_millis(200),
-        async {
-            loop {
-                match ClientOptions::new().open(WINDOWS_PIPE_NAME) {
-                    Ok(c) => return Ok(c),
-                    Err(e) if e.raw_os_error() == Some(2) => {
-                        // ERROR_FILE_NOT_FOUND (daemon pipe does not exist, fail fast)
-                        return Err(anyhow::anyhow!("IPC pipe does not exist"));
-                    }
-                    Err(e) if e.raw_os_error() == Some(231) => {
-                        // ERROR_PIPE_BUSY: retry
-                        tokio::time::sleep(Duration::from_millis(10)).await;
-                    }
-                    Err(e) => return Err(anyhow::Error::from(e)),
+    let client = tokio::time::timeout(Duration::from_millis(200), async {
+        loop {
+            match ClientOptions::new().open(WINDOWS_PIPE_NAME) {
+                Ok(c) => return Ok(c),
+                Err(e) if e.raw_os_error() == Some(2) => {
+                    // ERROR_FILE_NOT_FOUND (daemon pipe does not exist, fail fast)
+                    return Err(anyhow::anyhow!("IPC pipe does not exist"));
                 }
+                Err(e) if e.raw_os_error() == Some(231) => {
+                    // ERROR_PIPE_BUSY: retry
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(e) => return Err(anyhow::Error::from(e)),
             }
-        },
-    )
+        }
+    })
     .await
     .context("Timed out connecting to daemon pipe")??;
 
@@ -71,7 +68,9 @@ pub async fn send_ipc_command(cmd: &IpcCommand) -> Result<IpcResponse> {
 #[cfg(not(windows))]
 pub fn get_unix_socket_path() -> std::path::PathBuf {
     if let Some(home) = dirs::home_dir() {
-        home.join(".config").join("amaranctl").join("amaranctl.sock")
+        home.join(".config")
+            .join("amaranctl")
+            .join("amaranctl.sock")
     } else {
         std::path::PathBuf::from("/tmp/amaranctl.sock")
     }

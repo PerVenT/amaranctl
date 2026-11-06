@@ -26,7 +26,7 @@ pub fn cct_to_rgb(kelvin: u16) -> (u8, u8, u8) {
     let k = kelvin.clamp(2700, 6500);
     if k <= 4500 {
         let t = (k - 2700) as f32 / (4500 - 2700) as f32;
-        let r = (255.0 + (255.0 - 255.0) * t).round() as u8;
+        let r = 255u8;
         let g = (170.0 + (244.0 - 170.0) * t).round() as u8;
         let b = (51.0 + (224.0 - 51.0) * t).round() as u8;
         (r, g, b)
@@ -206,43 +206,70 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
                         match cmd {
                             IpcCommand::On => {
                                 let _ = tx.send(AppAction::SetPower(true));
-                                IpcResponse { ok: true, message: Some("Power ON".into()) }
+                                IpcResponse {
+                                    ok: true,
+                                    message: Some("Power ON".into()),
+                                }
                             }
                             IpcCommand::Off => {
                                 let _ = tx.send(AppAction::SetPower(false));
-                                IpcResponse { ok: true, message: Some("Power OFF".into()) }
+                                IpcResponse {
+                                    ok: true,
+                                    message: Some("Power OFF".into()),
+                                }
                             }
                             IpcCommand::Toggle => {
                                 let _ = tx.send(AppAction::TogglePower);
-                                IpcResponse { ok: true, message: Some("Power TOGGLED".into()) }
+                                IpcResponse {
+                                    ok: true,
+                                    message: Some("Power TOGGLED".into()),
+                                }
                             }
                             IpcCommand::Brightness(val) => {
                                 let _ = tx.send(AppAction::SetBrightness(val));
-                                IpcResponse { ok: true, message: Some(format!("Brightness set to {:.1}%", val)) }
+                                IpcResponse {
+                                    ok: true,
+                                    message: Some(format!("Brightness set to {:.1}%", val)),
+                                }
                             }
                             IpcCommand::AdjustBrightness(delta) => {
                                 let _ = tx.send(AppAction::AdjustBrightness(delta));
-                                IpcResponse { ok: true, message: Some(format!("Brightness adjusted by {:+.1}%", delta)) }
+                                IpcResponse {
+                                    ok: true,
+                                    message: Some(format!("Brightness adjusted by {:+.1}%", delta)),
+                                }
                             }
                             IpcCommand::Cct(val) => {
                                 let _ = tx.send(AppAction::SetCct(val));
-                                IpcResponse { ok: true, message: Some(format!("CCT set to {}K", val)) }
+                                IpcResponse {
+                                    ok: true,
+                                    message: Some(format!("CCT set to {}K", val)),
+                                }
                             }
                             IpcCommand::AdjustCct(delta) => {
                                 let _ = tx.send(AppAction::AdjustCct(delta));
-                                IpcResponse { ok: true, message: Some(format!("CCT adjusted by {:+0}K", delta)) }
+                                IpcResponse {
+                                    ok: true,
+                                    message: Some(format!("CCT adjusted by {:+0}K", delta)),
+                                }
                             }
                             IpcCommand::Status => {
                                 let s = status_ref.read().await.clone();
-                                let json_str = serde_json::to_string(&s).unwrap_or_else(|_| "{}".into());
-                                IpcResponse { ok: true, message: Some(json_str) }
+                                let json_str =
+                                    serde_json::to_string(&s).unwrap_or_else(|_| "{}".into());
+                                IpcResponse {
+                                    ok: true,
+                                    message: Some(json_str),
+                                }
                             }
-                            IpcCommand::Ping => {
-                                IpcResponse { ok: true, message: Some("pong".into()) }
-                            }
+                            IpcCommand::Ping => IpcResponse {
+                                ok: true,
+                                message: Some("pong".into()),
+                            },
                         }
                     }
-                }).await;
+                })
+                .await;
             });
 
             // Attempt initial connection in background
@@ -254,7 +281,7 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
                 tokio::select! {
                     _ = poll_interval.tick() => {
                         if client.is_connected().await {
-                            if let Err(_) = client.poll_status().await {
+                            if client.poll_status().await.is_err() {
                                 let _ = client.disconnect().await;
                             }
                         } else if client.has_peripheral() {
@@ -330,16 +357,36 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
                         "toggle" => {
                             let _ = tx.send(AppAction::TogglePower);
                         }
-                        "b_10" => { let _ = tx.send(AppAction::SetBrightness(10.0)); }
-                        "b_25" => { let _ = tx.send(AppAction::SetBrightness(25.0)); }
-                        "b_50" => { let _ = tx.send(AppAction::SetBrightness(50.0)); }
-                        "b_75" => { let _ = tx.send(AppAction::SetBrightness(75.0)); }
-                        "b_100" => { let _ = tx.send(AppAction::SetBrightness(100.0)); }
-                        "c_2700" => { let _ = tx.send(AppAction::SetCct(2700)); }
-                        "c_3200" => { let _ = tx.send(AppAction::SetCct(3200)); }
-                        "c_4500" => { let _ = tx.send(AppAction::SetCct(4500)); }
-                        "c_5600" => { let _ = tx.send(AppAction::SetCct(5600)); }
-                        "c_6500" => { let _ = tx.send(AppAction::SetCct(6500)); }
+                        "b_10" => {
+                            let _ = tx.send(AppAction::SetBrightness(10.0));
+                        }
+                        "b_25" => {
+                            let _ = tx.send(AppAction::SetBrightness(25.0));
+                        }
+                        "b_50" => {
+                            let _ = tx.send(AppAction::SetBrightness(50.0));
+                        }
+                        "b_75" => {
+                            let _ = tx.send(AppAction::SetBrightness(75.0));
+                        }
+                        "b_100" => {
+                            let _ = tx.send(AppAction::SetBrightness(100.0));
+                        }
+                        "c_2700" => {
+                            let _ = tx.send(AppAction::SetCct(2700));
+                        }
+                        "c_3200" => {
+                            let _ = tx.send(AppAction::SetCct(3200));
+                        }
+                        "c_4500" => {
+                            let _ = tx.send(AppAction::SetCct(4500));
+                        }
+                        "c_5600" => {
+                            let _ = tx.send(AppAction::SetCct(5600));
+                        }
+                        "c_6500" => {
+                            let _ = tx.send(AppAction::SetCct(6500));
+                        }
                         "autostart" => {
                             let new_state = !is_autostart_enabled();
                             let _ = set_autostart(new_state);
@@ -377,7 +424,8 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
                 if let Ok(guard) = shared_status.try_read() {
                     let cur = guard.clone();
                     let is_connecting = cur.connecting;
-                    let should_update_anim = is_connecting && last_anim_tick.elapsed() >= Duration::from_millis(400);
+                    let should_update_anim =
+                        is_connecting && last_anim_tick.elapsed() >= Duration::from_millis(400);
                     let status_changed = cur != last_rendered_status;
 
                     if status_changed || should_update_anim {
@@ -410,16 +458,36 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
                     "toggle" => {
                         let _ = tx.send(AppAction::TogglePower);
                     }
-                    "b_10" => { let _ = tx.send(AppAction::SetBrightness(10.0)); }
-                    "b_25" => { let _ = tx.send(AppAction::SetBrightness(25.0)); }
-                    "b_50" => { let _ = tx.send(AppAction::SetBrightness(50.0)); }
-                    "b_75" => { let _ = tx.send(AppAction::SetBrightness(75.0)); }
-                    "b_100" => { let _ = tx.send(AppAction::SetBrightness(100.0)); }
-                    "c_2700" => { let _ = tx.send(AppAction::SetCct(2700)); }
-                    "c_3200" => { let _ = tx.send(AppAction::SetCct(3200)); }
-                    "c_4500" => { let _ = tx.send(AppAction::SetCct(4500)); }
-                    "c_5600" => { let _ = tx.send(AppAction::SetCct(5600)); }
-                    "c_6500" => { let _ = tx.send(AppAction::SetCct(6500)); }
+                    "b_10" => {
+                        let _ = tx.send(AppAction::SetBrightness(10.0));
+                    }
+                    "b_25" => {
+                        let _ = tx.send(AppAction::SetBrightness(25.0));
+                    }
+                    "b_50" => {
+                        let _ = tx.send(AppAction::SetBrightness(50.0));
+                    }
+                    "b_75" => {
+                        let _ = tx.send(AppAction::SetBrightness(75.0));
+                    }
+                    "b_100" => {
+                        let _ = tx.send(AppAction::SetBrightness(100.0));
+                    }
+                    "c_2700" => {
+                        let _ = tx.send(AppAction::SetCct(2700));
+                    }
+                    "c_3200" => {
+                        let _ = tx.send(AppAction::SetCct(3200));
+                    }
+                    "c_4500" => {
+                        let _ = tx.send(AppAction::SetCct(4500));
+                    }
+                    "c_5600" => {
+                        let _ = tx.send(AppAction::SetCct(5600));
+                    }
+                    "c_6500" => {
+                        let _ = tx.send(AppAction::SetCct(6500));
+                    }
                     "autostart" => {
                         let new_state = !is_autostart_enabled();
                         let _ = set_autostart(new_state);
@@ -456,7 +524,8 @@ pub fn run_tray_app(config: AppConfig) -> Result<()> {
             if let Ok(guard) = shared_status.try_read() {
                 let cur = guard.clone();
                 let is_connecting = cur.connecting;
-                let should_update_anim = is_connecting && last_anim_tick.elapsed() >= Duration::from_millis(400);
+                let should_update_anim =
+                    is_connecting && last_anim_tick.elapsed() >= Duration::from_millis(400);
                 let status_changed = cur != last_rendered_status;
 
                 if status_changed || should_update_anim {

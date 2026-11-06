@@ -1,17 +1,18 @@
-use std::path::Path;
 use amaranctl::config::AppConfig;
+use std::path::Path;
 
 #[test]
-fn test_load_real_config_file() {
-    let config = AppConfig::load_from_path(Path::new("config.json")).expect("Failed to load config.json");
-    assert_eq!(config.mesh_uuid, "c4e7e379d8ad11f1b2433ec5dd894707");
+fn test_load_example_config_file() {
+    let config = AppConfig::load_from_path(Path::new("config.json.example"))
+        .expect("Failed to load config.json.example");
+    assert_eq!(config.mesh_uuid, "00112233445566778899aabbccddeeff");
     assert_eq!(config.net_key_bytes().len(), 16);
     assert_eq!(config.app_key_bytes().len(), 16);
     assert_eq!(config.lights.len(), 1);
-    
+
     let light = &config.lights[0];
-    assert_eq!(light.name, "amaran 60x S-FD81D5");
-    assert_eq!(light.mac, "70:3E:97:FD:81:D5");
+    assert_eq!(light.name, "Amaran 60x S");
+    assert_eq!(light.mac, "AA:BB:CC:DD:EE:FF");
     assert_eq!(light.address, 2);
     assert_eq!(light.device_key_bytes().unwrap().len(), 16);
 }
@@ -39,7 +40,8 @@ fn test_parse_config_str() {
 fn test_parse_config_with_utf8_bom() {
     // UTF-8 BOM is \u{feff} (bytes EF BB BF)
     let json_with_bom = "\u{feff}{\"meshUuid\":\"1234\",\"netKey\":\"00112233445566778899aabbccddeeff\",\"appKey\":\"ffeeddccbbaa99887766554433221100\",\"lights\":[]}";
-    let config = AppConfig::from_json_str(json_with_bom).expect("BOM should be stripped and parsed cleanly");
+    let config =
+        AppConfig::from_json_str(json_with_bom).expect("BOM should be stripped and parsed cleanly");
     assert_eq!(config.mesh_uuid, "1234");
     assert_eq!(config.net_key_bytes().len(), 16);
 }

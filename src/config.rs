@@ -1,7 +1,7 @@
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use anyhow::{Context, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,8 +42,8 @@ impl AppConfig {
         if clean.is_empty() {
             anyhow::bail!("Config file is empty");
         }
-        let config: Self = serde_json::from_str(clean)
-            .context("Failed to deserialize AppConfig from JSON")?;
+        let config: Self =
+            serde_json::from_str(clean).context("Failed to deserialize AppConfig from JSON")?;
         Ok(config)
     }
 
@@ -121,7 +121,10 @@ impl AppConfig {
             let target_file = target_dir.join("config.json");
             if let Ok(json_str) = serde_json::to_string_pretty(&config) {
                 let _ = fs::write(&target_file, json_str);
-                eprintln!("[+] Auto-imported credentials from {:?} -> {:?}", db_path, target_file);
+                eprintln!(
+                    "[+] Auto-imported credentials from {:?} -> {:?}",
+                    db_path, target_file
+                );
             }
         }
 

@@ -4,7 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-podman run --rm \
+DOCKER="${DOCKER:-$(which podman 2>/dev/null || which docker 2>/dev/null || echo podman)}"
+
+"${DOCKER}" run --rm \
     -v cargo-cache:/usr/local/cargo/registry:Z \
     -v cargo-git:/usr/local/cargo/git:Z \
     -v "${PROJECT_ROOT}:/workspace:Z" \

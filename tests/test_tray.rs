@@ -18,7 +18,7 @@ fn test_cct_to_rgb_interpolation() {
     // 5600K
     let (r, g, b) = cct_to_rgb(5600);
     assert!(r >= 204);
-    assert!(g >= 230 && g <= 244);
+    assert!((230..=244).contains(&g));
     assert!(b >= 224);
 }
 

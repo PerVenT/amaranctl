@@ -1,0 +1,15 @@
+{
+  "meshUuid": "00112233445566778899aabbccddeeff",
+  "netKey": "00112233445566778899AABBCCDDEEFF",
+  "appKey": "FFEEDDCCBBAA99887766554433221100",
+  "lights": [
+    {
+      "name": "Amaran 60x S",
+      "mac": "AA:BB:CC:DD:EE:FF",
+      "address": 2,
+      "deviceKey": "0123456789ABCDEF0123456789ABCDEF",
+      "deviceUuid": "00112233445566778899AABBCCDDEEFF",
+      "code": "400M5"
+    }
+  ]
+}

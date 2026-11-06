@@ -1,10 +1,10 @@
-pub mod config;
-pub mod mesh;
+pub mod autostart;
 pub mod ble;
 pub mod cli;
-pub mod autostart;
-pub mod hotkeys;
-pub mod tray;
-pub mod sqlite_dyn;
-pub mod ipc;
+pub mod config;
 pub mod daemon;
+pub mod hotkeys;
+pub mod ipc;
+pub mod mesh;
+pub mod sqlite_dyn;
+pub mod tray;

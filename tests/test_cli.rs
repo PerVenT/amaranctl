@@ -1,5 +1,5 @@
-use clap::Parser;
 use amaranctl::cli::{parse_brightness_val, parse_cct_val, Cli, Commands};
+use clap::Parser;
 
 #[test]
 fn test_cli_on_off() {
@@ -16,26 +16,49 @@ fn test_cli_on_off() {
 fn test_cli_brightness() {
     let args = vec!["amaranctl", "brightness", "50"];
     let cli = Cli::parse_from(args);
-    assert_eq!(cli.command, Some(Commands::Brightness { value: "50".into() }));
+    assert_eq!(
+        cli.command,
+        Some(Commands::Brightness { value: "50".into() })
+    );
 
     let args = vec!["amaranctl", "brightness", "+10"];
     let cli = Cli::parse_from(args);
-    assert_eq!(cli.command, Some(Commands::Brightness { value: "+10".into() }));
+    assert_eq!(
+        cli.command,
+        Some(Commands::Brightness {
+            value: "+10".into()
+        })
+    );
 
     let args = vec!["amaranctl", "brightness", "--", "-15"];
     let cli = Cli::parse_from(args);
-    assert_eq!(cli.command, Some(Commands::Brightness { value: "-15".into() }));
+    assert_eq!(
+        cli.command,
+        Some(Commands::Brightness {
+            value: "-15".into()
+        })
+    );
 }
 
 #[test]
 fn test_cli_cct() {
     let args = vec!["amaranctl", "cct", "5600"];
     let cli = Cli::parse_from(args);
-    assert_eq!(cli.command, Some(Commands::Cct { value: "5600".into() }));
+    assert_eq!(
+        cli.command,
+        Some(Commands::Cct {
+            value: "5600".into()
+        })
+    );
 
     let args = vec!["amaranctl", "cct", "+500"];
     let cli = Cli::parse_from(args);
-    assert_eq!(cli.command, Some(Commands::Cct { value: "+500".into() }));
+    assert_eq!(
+        cli.command,
+        Some(Commands::Cct {
+            value: "+500".into()
+        })
+    );
 }
 
 #[test]

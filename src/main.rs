@@ -54,9 +54,8 @@ fn load_or_auto_import_config(custom: Option<PathBuf>) -> Result<AppConfig> {
     }
 
     // 5. If no valid config file found anywhere, attempt auto-import from amaran.db!
-    match AppConfig::try_auto_import_from_db() {
-        Ok(cfg) => return Ok(cfg),
-        Err(_) => {}
+    if let Ok(cfg) = AppConfig::try_auto_import_from_db() {
+        return Ok(cfg);
     }
 
     anyhow::bail!(
@@ -94,11 +93,15 @@ fn main() -> Result<()> {
             if let Some(json_str) = res.message {
                 if *json {
                     println!("{}", json_str);
-                } else if let Ok(s) = serde_json::from_str::<amaranctl::ble::LampStatus>(&json_str) {
+                } else if let Ok(s) = serde_json::from_str::<amaranctl::ble::LampStatus>(&json_str)
+                {
                     if !s.connected {
                         println!("Amaran 60x S: Disconnected (no link)");
                     } else if s.power {
-                        println!("Amaran 60x S: ON | Brightness: {:.0}% | CCT: {}K | Connected", s.brightness, s.cct);
+                        println!(
+                            "Amaran 60x S: ON | Brightness: {:.0}% | CCT: {}K | Connected",
+                            s.brightness, s.cct
+                        );
                     } else {
                         println!("Amaran 60x S: OFF (Ready) | Connected");
                     }
@@ -113,7 +116,7 @@ fn main() -> Result<()> {
         let config = load_or_auto_import_config(args.config)?;
         rt.block_on(async {
             let mut client = BleMeshClient::new(config)?;
-            if let Err(_) = client.ensure_connected().await {
+            if client.ensure_connected().await.is_err() {
                 if *json {
                     let s = amaranctl::ble::LampStatus::default();
                     println!("{}", serde_json::to_string(&s).unwrap());
@@ -131,7 +134,10 @@ fn main() -> Result<()> {
             } else if !s.connected {
                 println!("Amaran 60x S: Disconnected (no link)");
             } else if s.power {
-                println!("Amaran 60x S: ON | Brightness: {:.0}% | CCT: {}K | Connected", s.brightness, s.cct);
+                println!(
+                    "Amaran 60x S: ON | Brightness: {:.0}% | CCT: {}K | Connected",
+                    s.brightness, s.cct
+                );
             } else {
                 println!("Amaran 60x S: OFF (Ready) | Connected");
             }

@@ -1,9 +1,31 @@
-target/
-.superpowers/
-*.exe
-amaranctl
-__pycache__/
-*.pyc
-token.txt
-resp_*.json
-raw_*.json
+# ==============================================================================
+# Strict Whitelist .gitignore: Ignore everything except explicitly allowed files
+# ==============================================================================
+
+# 1. Ignore everything by default
+*
+
+# 2. Allow Git to enter directories so deeper rules can match
+!*/
+
+# 3. Whitelist root project configuration and documentation files
+!.gitignore
+!Cargo.toml
+!Cargo.lock
+!Dockerfile
+!Makefile
+!README.md
+!config.json.example
+
+# 4. Whitelist project source code and tests
+!src/**
+!tests/**
+
+# 5. Whitelist scripts and automation
+!scripts/**
+
+# 6. Whitelist project documentation and specifications
+!docs/**
+
+# 7. Whitelist CI/CD workflows
+!.github/**

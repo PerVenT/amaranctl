@@ -1,7 +1,7 @@
+use crate::ipc::{send_ipc_command, IpcCommand};
 use anyhow::{Context, Result};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use crate::ipc::{send_ipc_command, IpcCommand};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -22,7 +22,8 @@ pub async fn is_daemon_running() -> bool {
 ///
 /// Returns the PID of the spawned child process.
 pub fn spawn_detached_daemon(config_path: Option<&Path>) -> Result<u32> {
-    let current_exe = std::env::current_exe().context("Failed to obtain current executable path")?;
+    let current_exe =
+        std::env::current_exe().context("Failed to obtain current executable path")?;
 
     let mut cmd = Command::new(&current_exe);
     cmd.arg("--daemon-worker");
@@ -39,7 +40,11 @@ pub fn spawn_detached_daemon(config_path: Option<&Path>) -> Result<u32> {
             if let Some(parent) = p.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            std::fs::OpenOptions::new().create(true).append(true).open(&p).ok()
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&p)
+                .ok()
         });
 
     if let Some(f) = log_file {
@@ -69,7 +74,9 @@ pub fn spawn_detached_daemon(config_path: Option<&Path>) -> Result<u32> {
         cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
     }
 
-    let child = cmd.spawn().context("Failed to spawn detached daemon process")?;
+    let child = cmd
+        .spawn()
+        .context("Failed to spawn detached daemon process")?;
     let pid = child.id();
 
     // Give detached worker a moment to bind IPC pipe

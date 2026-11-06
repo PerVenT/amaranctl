@@ -1,9 +1,9 @@
 #![allow(non_snake_case)]
 
+use crate::config::{AppConfig, LightConfig};
+use anyhow::{bail, Context, Result};
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::path::Path;
-use anyhow::{bail, Context, Result};
-use crate::config::{AppConfig, LightConfig};
 
 type Sqlite3 = c_void;
 type Sqlite3Stmt = c_void;
@@ -31,16 +31,23 @@ struct DynLib {
 impl DynLib {
     unsafe fn load() -> Result<Self> {
         let name = CString::new("winsqlite3.dll").unwrap();
-        let handle = windows_sys::Win32::System::LibraryLoader::LoadLibraryA(name.as_ptr() as *const u8);
+        let handle =
+            windows_sys::Win32::System::LibraryLoader::LoadLibraryA(name.as_ptr() as *const u8);
         if handle.is_null() {
             let fallback = CString::new("sqlite3.dll").unwrap();
-            let handle_fb = windows_sys::Win32::System::LibraryLoader::LoadLibraryA(fallback.as_ptr() as *const u8);
+            let handle_fb = windows_sys::Win32::System::LibraryLoader::LoadLibraryA(
+                fallback.as_ptr() as *const u8,
+            );
             if handle_fb.is_null() {
                 bail!("Failed to load winsqlite3.dll or sqlite3.dll");
             }
-            return Ok(Self { handle: handle_fb as *mut c_void });
+            return Ok(Self {
+                handle: handle_fb as *mut c_void,
+            });
         }
-        Ok(Self { handle: handle as *mut c_void })
+        Ok(Self {
+            handle: handle as *mut c_void,
+        })
     }
 
     unsafe fn get_sym<T>(&self, sym: &str) -> Result<T> {
@@ -123,7 +130,9 @@ pub fn extract_credentials_from_db(db_path: &Path) -> Result<AppConfig> {
         bail!("Database file does not exist at {:?}", db_path);
     }
 
-    let path_str = db_path.to_str().context("invalid unicode in database path")?;
+    let path_str = db_path
+        .to_str()
+        .context("invalid unicode in database path")?;
     let c_path = CString::new(path_str).context("null byte in database path")?;
 
     unsafe {
@@ -145,7 +154,9 @@ pub fn extract_credentials_from_db(db_path: &Path) -> Result<AppConfig> {
         impl<'a> Drop for DbGuard<'a> {
             fn drop(&mut self) {
                 if !self.0.is_null() {
-                    unsafe { (self.1)(self.0); }
+                    unsafe {
+                        (self.1)(self.0);
+                    }
                 }
             }
         }
@@ -154,30 +165,58 @@ pub fn extract_credentials_from_db(db_path: &Path) -> Result<AppConfig> {
         // 1. Query mesh table
         let mesh_sql = CString::new("SELECT uuid, net_key, app_key FROM mesh LIMIT 1;").unwrap();
         let mut mesh_stmt: *mut Sqlite3Stmt = std::ptr::null_mut();
-        if sqlite_prepare(db, mesh_sql.as_ptr(), -1, &mut mesh_stmt, std::ptr::null_mut()) != 0 {
+        if sqlite_prepare(
+            db,
+            mesh_sql.as_ptr(),
+            -1,
+            &mut mesh_stmt,
+            std::ptr::null_mut(),
+        ) != 0
+        {
             bail!("Failed to prepare mesh query");
         }
 
         let step_res = sqlite_step(mesh_stmt);
-        if step_res != 100 { // SQLITE_ROW = 100
+        if step_res != 100 {
+            // SQLITE_ROW = 100
             sqlite_finalize(mesh_stmt);
             bail!("No mesh credentials found in database");
         }
 
-        let mesh_uuid = CStr::from_ptr(sqlite_col_text(mesh_stmt, 0)).to_string_lossy().to_string();
-        let net_key   = CStr::from_ptr(sqlite_col_text(mesh_stmt, 1)).to_string_lossy().to_string();
-        let app_key   = CStr::from_ptr(sqlite_col_text(mesh_stmt, 2)).to_string_lossy().to_string();
+        let mesh_uuid = CStr::from_ptr(sqlite_col_text(mesh_stmt, 0))
+            .to_string_lossy()
+            .to_string();
+        let net_key = CStr::from_ptr(sqlite_col_text(mesh_stmt, 1))
+            .to_string_lossy()
+            .to_string();
+        let app_key = CStr::from_ptr(sqlite_col_text(mesh_stmt, 2))
+            .to_string_lossy()
+            .to_string();
         sqlite_finalize(mesh_stmt);
 
         // 2. Query fixtures table
-        let fix_sql = CString::new("SELECT name, mac_address, node_address, device_key, device_uuid, code FROM fixtures;").unwrap();
+        let fix_sql = CString::new(
+            "SELECT name, mac_address, node_address, device_key, device_uuid, code FROM fixtures;",
+        )
+        .unwrap();
         let mut fix_stmt: *mut Sqlite3Stmt = std::ptr::null_mut();
         let mut lights = Vec::new();
 
-        if sqlite_prepare(db, fix_sql.as_ptr(), -1, &mut fix_stmt, std::ptr::null_mut()) == 0 {
+        if sqlite_prepare(
+            db,
+            fix_sql.as_ptr(),
+            -1,
+            &mut fix_stmt,
+            std::ptr::null_mut(),
+        ) == 0
+        {
             while sqlite_step(fix_stmt) == 100 {
-                let name = CStr::from_ptr(sqlite_col_text(fix_stmt, 0)).to_string_lossy().to_string();
-                let mac  = CStr::from_ptr(sqlite_col_text(fix_stmt, 1)).to_string_lossy().to_string();
+                let name = CStr::from_ptr(sqlite_col_text(fix_stmt, 0))
+                    .to_string_lossy()
+                    .to_string();
+                let mac = CStr::from_ptr(sqlite_col_text(fix_stmt, 1))
+                    .to_string_lossy()
+                    .to_string();
                 let address = sqlite_col_int(fix_stmt, 2) as u16;
 
                 let dev_key_ptr = sqlite_col_text(fix_stmt, 3);

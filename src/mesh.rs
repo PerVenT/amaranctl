@@ -74,9 +74,7 @@ pub fn k2(net_key: &[u8; 16]) -> (u8, [u8; 16], [u8; 16]) {
     let t = aes_cmac(&salt, net_key);
     let p = [0x00u8];
 
-    let mut m1 = Vec::with_capacity(2);
-    m1.push(p[0]);
-    m1.push(0x01);
+    let m1 = vec![p[0], 0x01];
     let t1 = aes_cmac(&t, &m1);
 
     let mut m2 = Vec::with_capacity(18);
@@ -113,11 +111,7 @@ pub fn compute_pecb(priv_key: &[u8; 16], iv_index: u32, privacy_random_7: &[u8])
     aes_ecb_block(priv_key, &input)
 }
 
-pub fn aes_ccm_encrypt(
-    key: &[u8; 16],
-    nonce: &[u8; 13],
-    plaintext: &[u8],
-) -> Result<Vec<u8>> {
+pub fn aes_ccm_encrypt(key: &[u8; 16], nonce: &[u8; 13], plaintext: &[u8]) -> Result<Vec<u8>> {
     let cipher = AesCcm4::new(key.into());
     let payload = Payload {
         msg: plaintext,
@@ -350,7 +344,7 @@ pub fn encode_cct(kelvin: u16, intensity_0_1000: u16, gm_offset: i8) -> [u8; 10]
     let gm_flag = 0u64;
 
     let mut low64 = ((v as u64) & 0x03) << 62;
-    let mut high16 = 0x8200u16 | (((v >> 2) & 0xff) as u16);
+    let mut high16 = 0x8200u16 | ((v >> 2) & 0xff);
 
     if tcct < 1001 {
         low64 |= (tcct as u64) << 52;
@@ -363,9 +357,7 @@ pub fn encode_cct(kelvin: u16, intensity_0_1000: u16, gm_offset: i8) -> [u8; 10]
     low64 |= ((g as u64) & 0x7f) << 45;
 
     let mut out = [0u8; 10];
-    for i in 0..8 {
-        out[i] = ((low64 >> (i * 8)) & 0xff) as u8;
-    }
+    out[..8].copy_from_slice(&low64.to_le_bytes());
     out[8] = (high16 & 0xff) as u8;
     out[9] = ((high16 >> 8) & 0xff) as u8;
     out[0] = checksum(&out);
@@ -427,7 +419,10 @@ pub fn decrypt_proxy_pdu(
         .context("decrypt network payload")?;
 
     if net_payload.len() < 3 {
-        bail!("Decrypted network payload too short: {} bytes", net_payload.len());
+        bail!(
+            "Decrypted network payload too short: {} bytes",
+            net_payload.len()
+        );
     }
 
     let dst = ((net_payload[0] as u16) << 8) | (net_payload[1] as u16);
@@ -456,10 +451,7 @@ pub fn decode_telink_status(payload: &[u8]) -> Option<LampStatusData> {
     }
 
     let cmd = p[9] & 0x7f;
-    let mut low64: u64 = 0;
-    for i in 0..8 {
-        low64 |= (p[i] as u64) << (i * 8);
-    }
+    let low64 = u64::from_le_bytes(p[0..8].try_into().unwrap());
     let high16: u16 = (p[8] as u16) | ((p[9] as u16) << 8);
 
     let power = ((low64 >> 8) & 0x01) == 1;

@@ -1,5 +1,5 @@
-use amaranctl::config::AppConfig;
 use amaranctl::ble::{BleMeshClient, LampStatus};
+use amaranctl::config::AppConfig;
 
 #[test]
 fn test_ble_client_initialization_and_seq() {
@@ -41,11 +41,17 @@ fn test_lamp_status_defaults_and_formatting() {
     assert_eq!(s.tooltip_text(), "Amaran 60x S — ⚪ OFF (Готовий)");
 
     s.connecting = true;
-    assert_eq!(s.tooltip_text(), "Amaran 60x S — ⏳ Пошук та підключення...");
+    assert_eq!(
+        s.tooltip_text(),
+        "Amaran 60x S — ⏳ Пошук та підключення..."
+    );
 
     s.connecting = false;
     s.connected = false;
-    assert_eq!(s.tooltip_text(), "Amaran 60x S — 🔴 Немає зв'язку (перевірте живлення лампи)");
+    assert_eq!(
+        s.tooltip_text(),
+        "Amaran 60x S — 🔴 Немає зв'язку (перевірте живлення лампи)"
+    );
 }
 
 #[tokio::test]
