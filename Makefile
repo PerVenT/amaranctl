@@ -46,6 +46,10 @@ image: ## Build cross-compilation builder container image using buildx
 	@echo "==> Building container image '$(IMAGE_NAME):$(IMAGE_TAG)' via $(BUILDX_CMD)..."
 	$(BUILDX_CMD) -t $(IMAGE_NAME):$(IMAGE_TAG) -f Dockerfile .
 
+.PHONY: cargo
+cargo: ## Run arbitrary cargo command inside builder container (e.g. make cargo ARGS="check")
+	@$(RUN_IN_CONTAINER) cargo $(ARGS)
+
 .PHONY: test
 test: ## Run unit and integration tests inside builder container
 	@echo "==> Running tests..."

@@ -27,18 +27,15 @@ $BuiltExe = Join-Path $ProjectRoot "target\x86_64-pc-windows-gnu\release\amaranc
 
 # 1. Build if requested and not skipped
 if (-not $SkipBuild) {
-    $BuildScript = Join-Path $ScriptsDir "build-windows.sh"
-    if (Test-Path $BuildScript) {
-        Write-Host "[1/4] Building Windows release binary via container..." -ForegroundColor Yellow
-        $WslScriptPath = ($BuildScript -replace '\\', '/') -replace '^([A-Za-z]):', { '/mnt/' + $_.Groups[1].Value.ToLower() }
-        try {
-            wsl -d Debian bash $WslScriptPath
-            if ($LASTEXITCODE -ne 0) {
-                Write-Warning "Container build returned non-zero code ($LASTEXITCODE)."
-            }
-        } catch {
-            Write-Warning "Could not run container build via WSL: $_"
+    Write-Host "[1/4] Building Windows release binary via Makefile..." -ForegroundColor Yellow
+    $WslRoot = ($ProjectRoot -replace '\\', '/') -replace '^([A-Za-z]):', { '/mnt/' + $_.Groups[1].Value.ToLower() }
+    try {
+        wsl -d Debian bash -c "cd '$WslRoot' && make build-windows"
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "make build-windows returned non-zero code ($LASTEXITCODE)."
         }
+    } catch {
+        Write-Warning "Could not run container build via WSL: $_"
     }
 }
 
