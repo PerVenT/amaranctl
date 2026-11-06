@@ -13,9 +13,13 @@
 .PARAMETER Fps
     Frames per second for output GIF (default: 15).
 .PARAMETER TotalWidth
-    Target width in pixels for composite output (default: 960).
+    Target width in pixels for composite output (default: 800).
+.PARAMETER Speed
+    Playback speed multiplier (e.g. 4.0 for 4x speedup, default: 4.0).
+.PARAMETER Split
+    Crop and split terminal and tray side-by-side.
 .PARAMETER Direct
-    Directly encode the input video without split cropping.
+    Directly encode the input video without split cropping (default).
 .PARAMETER Sample
     Force generation of synthetic demonstration asset.
 #>
@@ -25,7 +29,9 @@ param(
     [string]$InputVideo,
     [string]$OutputDir,
     [int]$Fps = 15,
-    [int]$TotalWidth = 960,
+    [int]$TotalWidth = 800,
+    [double]$Speed = 4.0,
+    [switch]$Split,
     [switch]$Direct,
     [switch]$Sample
 )
@@ -135,17 +141,7 @@ Write-Host ""
 if ($InputVideo -and (Test-Path $InputVideo) -and -not $Sample) {
     Write-Host "[1/2] Processing raw recording from: $InputVideo..." -ForegroundColor Yellow
 
-    if ($Direct) {
-        Write-Host "    Mode: Direct scaling ($TotalWidth px width)..." -ForegroundColor DarkGray
-        $filterComplex = "scale=${TotalWidth}:-2:flags=lanczos"
-
-        Write-Host "    Encoding MP4 video..." -ForegroundColor DarkGray
-        Invoke-FFmpeg @("-i", $InputVideo, "-vf", $filterComplex, "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "22", $OutputMp4)
-
-        Write-Host "    Generating palette-optimized GIF..." -ForegroundColor DarkGray
-        $paletteFilter = "$filterComplex,split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5"
-        Invoke-FFmpeg @("-i", $InputVideo, "-vf", $paletteFilter, "-r", "$Fps", $OutputGif)
-    } else {
+    if ($Split) {
         Write-Host "    Mode: Split-screen stitch (Terminal on Left, Zoomed Tray on Right)..." -ForegroundColor DarkGray
 
         # Calculate even dimensions: split screen 50/50
@@ -154,8 +150,9 @@ if ($InputVideo -and (Test-Path $InputVideo) -and -not $Sample) {
         $height = 360
 
         # Crop terminal (y=80..630) and taskbar notification area (x=560..840, y=0..56)
-        $filterComplex = "[0:v]crop=840:550:0:80,scale=${halfWidth}:${height}[term];" +
-                         "[0:v]crop=280:56:560:0,scale=${halfWidth}:96:flags=lanczos,pad=${halfWidth}:${height}:0:132:0x181825," +
+        $speedPrefix = if ($Speed -and $Speed -gt 1.0) { "setpts=PTS/${Speed}," } else { "" }
+        $filterComplex = "[0:v]${speedPrefix}crop=840:550:0:80,scale=${halfWidth}:${height}[term];" +
+                         "[0:v]${speedPrefix}crop=280:56:560:0,scale=${halfWidth}:96:flags=lanczos,pad=${halfWidth}:${height}:0:132:0x181825," +
                          "drawtext=text='Windows System Tray':fontcolor=0xa6adc8:fontsize=17:x=(w-text_w)/2:y=65," +
                          "drawtext=text='Live Adaptive Tray Icon':fontcolor=0x89b4fa:fontsize=13:x=(w-text_w)/2:y=255[tray];" +
                          "[term][tray]hstack[v]"
@@ -166,6 +163,19 @@ if ($InputVideo -and (Test-Path $InputVideo) -and -not $Sample) {
         Write-Host "    Generating palette-optimized GIF (<2MB)..." -ForegroundColor DarkGray
         $paletteFilter = "$filterComplex;[v]split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5"
         Invoke-FFmpeg @("-i", $InputVideo, "-filter_complex", $paletteFilter, "-r", "$Fps", $OutputGif)
+    } else {
+        $speedDesc = if ($Speed -and $Speed -gt 1.0) { "${Speed}x speedup" } else { "1x speed" }
+        Write-Host "    Mode: Direct scaling ($TotalWidth px width, $speedDesc)..." -ForegroundColor DarkGray
+
+        $speedFilter = if ($Speed -and $Speed -gt 1.0) { "setpts=PTS/${Speed}," } else { "" }
+        $filterComplex = "${speedFilter}scale=${TotalWidth}:-2:flags=lanczos"
+
+        Write-Host "    Encoding MP4 video..." -ForegroundColor DarkGray
+        Invoke-FFmpeg @("-i", $InputVideo, "-vf", $filterComplex, "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "22", $OutputMp4)
+
+        Write-Host "    Generating palette-optimized GIF (<2MB)..." -ForegroundColor DarkGray
+        $paletteFilter = "$filterComplex,split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5"
+        Invoke-FFmpeg @("-i", $InputVideo, "-vf", $paletteFilter, "-r", "$Fps", $OutputGif)
     }
 } else {
     Write-Host "[1/2] Generating synchronized animated split-screen demo..." -ForegroundColor Yellow
